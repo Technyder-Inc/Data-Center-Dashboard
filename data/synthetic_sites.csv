@@ -1,0 +1,7 @@
+site_id,site_name,location,electrical_capacity_mw,electrical_demand_mw,cooling_capacity_mwe,cooling_demand_mwe,rack_capacity,occupied_racks,annual_growth_pct,planned_power_expansion_mw,planned_cooling_expansion_mwe,planned_additional_racks,expansion_activation_month,estimated_project_cost_usd_m,risk_status
+DC1,Northern Virginia,"Ashburn, VA",8.00,5.90,7.50,5.60,420,315,13,3.50,3.00,180,17,45.60,High
+DC2,Central Ohio,"Columbus, OH",6.00,3.90,5.80,4.10,310,193,11,2.50,2.00,150,16,32.50,Medium
+DC3,Dallas,"Dallas, TX",10.00,8.00,9.20,7.80,510,416,18,3.50,4.00,250,17,50.50,Critical
+DC4,Phoenix,"Phoenix, AZ",7.00,5.50,6.40,5.10,365,277,16,3.50,3.00,160,8,45.20,Critical
+DC5,Atlanta,"Atlanta, GA",9.00,6.20,8.70,6.50,460,309,14,2.50,3.00,120,9,35.40,High
+DC6,Denver,"Denver, CO",5.00,3.00,4.80,3.20,265,158,12,2.00,1.50,80,17,24.85,Low
