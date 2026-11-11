@@ -17,11 +17,15 @@ def render():
     st.caption(f"Active scenario: **{p.name}** | Forecast months 0 to {H} | Expansion capacity is available from its activation month")
 
     c1, c2, c3 = st.columns([2, 3, 2])
-    res_label = c1.segmented_control("Resource", ["Power", "Cooling", "Racks"], default="Power", key="ui_fc_res") or "Power"
-    sel = c2.multiselect("Facilities", ids, default=ids, key="ui_fc_sites") or ids[:1]
+    st.session_state.setdefault("ui_fc_res", "Power")
+    st.session_state.setdefault("ui_fc_sites", ids)
+    res_label = c1.segmented_control("Resource", ["Power", "Cooling", "Racks"], key="ui_fc_res") or "Power"
+    sel = c2.multiselect("Facilities", ids, key="ui_fc_sites") or ids[:1]
     default_view = "Utilization (%)" if len(sel) > 1 else "Demand vs capacity"
-    view = c3.radio("Chart view", ["Utilization (%)", "Demand vs capacity"], index=["Utilization (%)", "Demand vs capacity"].index(default_view),
-                    key=f"ui_fc_view_{len(sel) > 1}", horizontal=True)
+    view_key = f"ui_fc_view_{len(sel) > 1}"
+    st.session_state.setdefault(view_key, default_view)
+    view = c3.radio("Chart view", ["Utilization (%)", "Demand vs capacity"], index=None,
+                    key=view_key, horizontal=True)
     res = res_label.lower()
     meta = RESOURCE_META[res]
 
@@ -29,6 +33,22 @@ def render():
         panel_title(f"{meta['label']} Forecast: {', '.join(sel)}")
         st.plotly_chart(charts.site_forecast(fc, sel, res, view, p, r.applied_expansions, ids), width="stretch")
         st.caption("Red X: first month demand exceeds capacity. Blue diamond: expansion activation. Dashed amber/red lines: warning and exhaustion thresholds.")
+
+    with st.container(border=True):
+        panel_title("Facility Data and Planned Expansion (synthetic baseline)")
+        cost = r.projects.set_index("site_id")["cost_usd_m"] if len(r.projects) else pd.Series(dtype=float)
+        fd = r.sites[r.sites["site_id"].isin(sel)]
+        st.dataframe(pd.DataFrame({
+            "Site": fd["site_id"], "Name": fd["site_name"], "Location": fd["location"],
+            "Electrical capacity (MW)": fd["electrical_capacity_mw"], "Electrical demand (MW)": fd["electrical_demand_mw"],
+            "Cooling capacity (MWe)": fd["cooling_capacity_mwe"], "Cooling load (MWe)": fd["cooling_demand_mwe"],
+            "Rack capacity": fd["rack_capacity"], "Occupied racks": fd["occupied_racks"], "Annual growth (%)": fd["annual_growth_pct"],
+            "Planned power (MW)": fd["planned_power_expansion_mw"], "Planned cooling (MWe)": fd["planned_cooling_expansion_mwe"],
+            "Planned racks": fd["planned_additional_racks"], "Activation month": fd["expansion_activation_month"],
+            "Project cost (USD M)": fd["site_id"].map(cost).round(2),
+            "Risk status (scenario)": fd["site_id"].map(ss.set_index("site_id")["risk_level"]),
+        }), hide_index=True, width="stretch")
+        st.caption("Baseline values come from data/synthetic_sites.csv. Project cost uses the unit costs set on Executive Decisions. Risk status reflects the active scenario.")
 
     with st.container(border=True):
         panel_title("First Limiting Resource by Site")

@@ -13,7 +13,7 @@ Synthetic, public-safe Streamlit demonstration of regional data center capacity 
 ## Structure
 
 ```
-app.py                 top control bar (navigation + controls), shared scenario run
+app.py                 sidebar navigation and controls, shared scenario run
 pages/                 four page modules (render functions)
 models/                forecast.py, scenarios.py, risk.py, capital.py (single calculation engine)
 components/            charts.py, kpi_cards.py, styles.py, state.py (session state)
@@ -55,6 +55,18 @@ python -m pytest
 3. No secrets or environment variables are required. Python 3.11+.
 
 Publishing has not been performed from this workspace.
+
+## Third-party licences
+
+| Package | Use | Licence |
+|---|---|---|
+| Streamlit | App framework | Apache 2.0 |
+| pandas | Data handling | BSD 3-Clause |
+| NumPy | Numerical calculations | BSD 3-Clause |
+| Plotly | Charts | MIT |
+| pytest (development only) | Tests | MIT |
+
+No templates, fonts, images or other third-party assets are bundled.
 
 ## Assumptions and limitations
 

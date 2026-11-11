@@ -59,12 +59,16 @@ def effective_growth_pct(sites: pd.DataFrame, params: ScenarioParams) -> pd.Seri
         g = g + params.growth_value_pct
     for sid, val in params.site_growth_overrides.items():
         g[sid] = float(val)
+    if not np.isfinite(g).all() or not g.between(-50, 100).all():
+        from utils.validation import ValidationError
+        raise ValidationError(["Effective site growth must be finite and within -50 to 100 percent"])
     return g
 
 
-def build_forecast(sites: pd.DataFrame, params: ScenarioParams) -> pd.DataFrame:
-    validate_sites(sites).raise_if_invalid()
-    validate_params(params, sites["site_id"].tolist()).raise_if_invalid()
+def build_forecast(sites: pd.DataFrame, params: ScenarioParams, validate: bool = True) -> pd.DataFrame:
+    if validate:
+        validate_sites(sites).raise_if_invalid()
+        validate_params(params, sites["site_id"].tolist()).raise_if_invalid()
     ids = sites["site_id"].tolist()
     idx = {s: i for i, s in enumerate(ids)}
     months = np.arange(0, MAX_MONTH + 1)
@@ -94,7 +98,7 @@ def build_forecast(sites: pd.DataFrame, params: ScenarioParams) -> pd.DataFrame:
     fc = pd.concat(frames, ignore_index=True)
     fc["utilization_pct"] = 100.0 * fc["demand"] / fc["capacity"]
     fc["headroom"] = fc["capacity"] - fc["demand"]
-    fc["exhausted"] = fc["demand"] > fc["capacity"] * (1 + EPS)
+    fc["exhausted"] = fc["demand"] > fc["capacity"]
     return fc
 
 
@@ -104,37 +108,44 @@ def _first(months: np.ndarray, mask: np.ndarray):
 
 
 def resource_analysis(fc: pd.DataFrame, sites: pd.DataFrame, params: ScenarioParams) -> pd.DataFrame:
-    """One row per site and resource, evaluated over months 0..horizon."""
-    base = sites.set_index("site_id")
-    win = fc[fc["month"] <= params.horizon]
+    """One row per site and resource, evaluated over months 0..horizon.
+
+    Relies on the row order produced by build_forecast: resource, then site, then month.
+    """
+    ids = sites["site_id"].tolist()
+    shape = (len(RESOURCES), len(ids), MAX_MONTH + 1)
+    H = params.horizon
+    a = {c: fc[c].to_numpy().reshape(shape)[:, :, : H + 1] for c in ("demand", "capacity", "utilization_pct", "headroom", "exhausted")}
+    months = np.arange(H + 1)
     rows = []
-    for (sid, res), g in win.groupby(["site_id", "resource"], sort=False):
-        g = g.sort_values("month")
-        m = g["month"].to_numpy()
-        u = g["utilization_pct"].to_numpy()
+    for ri, res in enumerate(RESOURCES):
         meta = RESOURCE_META[res]
-        peak_i = int(np.argmax(u))
-        rows.append(
-            {
-                "site_id": sid,
-                "resource": res,
-                "unit": meta["unit"],
-                "baseline_demand": float(base.at[sid, meta["dem"]]),
-                "baseline_capacity": float(base.at[sid, meta["cap"]]),
-                "month0_demand": float(g["demand"].iloc[0]),
-                "month0_capacity": float(g["capacity"].iloc[0]),
-                "month0_util_pct": float(u[0]),
-                "horizon_demand": float(g["demand"].iloc[-1]),
-                "horizon_capacity": float(g["capacity"].iloc[-1]),
-                "horizon_util_pct": float(u[-1]),
-                "horizon_headroom": float(g["headroom"].iloc[-1]),
-                "peak_util_pct": float(u[peak_i]),
-                "peak_month": int(m[peak_i]),
-                "first_warning_month": _first(m, u >= params.warn_pct - EPS),
-                "first_critical_month": _first(m, u >= params.critical_pct - EPS),
-                "first_exhaustion_month": _first(m, g["exhausted"].to_numpy()),
-            }
-        )
+        base_dem = sites[meta["dem"]].to_numpy(float)
+        base_cap = sites[meta["cap"]].to_numpy(float)
+        for si, sid in enumerate(ids):
+            u = a["utilization_pct"][ri, si]
+            peak_i = int(np.argmax(u))
+            rows.append(
+                {
+                    "site_id": sid,
+                    "resource": res,
+                    "unit": meta["unit"],
+                    "baseline_demand": float(base_dem[si]),
+                    "baseline_capacity": float(base_cap[si]),
+                    "month0_demand": float(a["demand"][ri, si, 0]),
+                    "month0_capacity": float(a["capacity"][ri, si, 0]),
+                    "month0_util_pct": float(u[0]),
+                    "horizon_demand": float(a["demand"][ri, si, -1]),
+                    "horizon_capacity": float(a["capacity"][ri, si, -1]),
+                    "horizon_util_pct": float(u[-1]),
+                    "horizon_headroom": float(a["headroom"][ri, si, -1]),
+                    "peak_util_pct": float(u[peak_i]),
+                    "peak_month": peak_i,
+                    "first_warning_month": _first(months, u >= params.warn_pct - EPS),
+                    "first_critical_month": _first(months, u >= params.critical_pct - EPS),
+                    "first_exhaustion_month": _first(months, a["exhausted"][ri, si]),
+                }
+            )
     df = pd.DataFrame(rows)
     for c in ("first_warning_month", "first_critical_month", "first_exhaustion_month"):
         df[c] = df[c].astype("Int64")
@@ -146,7 +157,7 @@ def portfolio_series(fc: pd.DataFrame) -> pd.DataFrame:
     g = fc.groupby(["month", "resource"], as_index=False)[["demand", "capacity"]].sum()
     g["utilization_pct"] = 100.0 * g["demand"] / g["capacity"]
     g["headroom"] = g["capacity"] - g["demand"]
-    g["exhausted"] = g["demand"] > g["capacity"] * (1 + EPS)
+    g["exhausted"] = g["demand"] > g["capacity"]
     return g
 
 

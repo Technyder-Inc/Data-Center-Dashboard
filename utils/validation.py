@@ -6,7 +6,9 @@ modeled overload (demand above capacity) is allowed and reported as a warning.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
+import numpy as np
 import pandas as pd
 
 MAX_MONTH = 36
@@ -73,6 +75,12 @@ def validate_sites(df: pd.DataFrame) -> ValidationReport:
     if num.isna().any().any():
         rep.errors.append("Non-numeric values in numeric columns")
         return rep
+    if not np.isfinite(num.to_numpy()).all():
+        rep.errors.append("All dataset numbers must be finite")
+        return rep
+    if any(not pd.api.types.is_numeric_dtype(df[c]) for c in NUMERIC_COLUMNS):
+        rep.errors.append("Numeric columns must have numeric dtypes")
+        return rep
 
     for col in NUMERIC_COLUMNS:
         if col == "annual_growth_pct":
@@ -113,6 +121,12 @@ def validate_sites(df: pd.DataFrame) -> ValidationReport:
 
 def validate_params(params, site_ids: list[str]) -> ValidationReport:
     rep = ValidationReport()
+    values = [params.growth_value_pct, params.efficiency_pct, params.budget_usd_m,
+              params.warn_pct, params.critical_pct, *params.site_growth_overrides.values()]
+    values.extend(v for e in params.expansions for v in (e.power_mw, e.cooling_mwe, e.racks, e.month))
+    if not all(isinstance(v, (int, float, np.number)) and isfinite(v) for v in values):
+        rep.errors.append("Scenario numbers must be finite numeric values")
+        return rep
     if params.horizon not in HORIZONS:
         rep.errors.append(f"Horizon must be one of {', '.join(map(str, HORIZONS))} months")
     if params.growth_mode not in ("site", "adjust", "override"):
@@ -136,6 +150,8 @@ def validate_params(params, site_ids: list[str]) -> ValidationReport:
             rep.errors.append(f"Expansion references unknown site {e.site_id}")
         if min(e.power_mw, e.cooling_mwe, e.racks) < 0:
             rep.errors.append(f"Expansion for {e.site_id} contains negative capacity")
-        if not 0 <= e.month <= MAX_MONTH:
+        if not 0 <= e.month <= MAX_MONTH or e.month % 1:
             rep.errors.append(f"Expansion activation month for {e.site_id} must be 0 to {MAX_MONTH}")
+        if e.racks % 1:
+            rep.errors.append(f"Expansion racks for {e.site_id} must be a whole number")
     return rep

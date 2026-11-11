@@ -6,7 +6,7 @@ import streamlit as st
 
 from models.capital import CostAssumptions
 from models.forecast import Expansion, ScenarioParams
-from models.scenarios import DEFAULT_BUDGET_USD_M, DEFAULT_EXPANSION, EFFICIENCY_PCT, HIGH_GROWTH_PCT
+from models.scenarios import compare_presets, run_scenario, DEFAULT_BUDGET_USD_M, DEFAULT_EXPANSION, EFFICIENCY_PCT, HIGH_GROWTH_PCT
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "synthetic_sites.csv"
 GROWTH_MODES = {"site": "Site rates (dataset)", "adjust": "Adjust all sites (+/- points)", "override": "Override all sites (%)"}
@@ -164,3 +164,20 @@ def apply_quick_expansion() -> None:
     apply_preset("Infrastructure Expansion")
     s = st.session_state
     s["exp_site"], s["exp_power"], s["exp_cooling"], s["exp_racks"], s["exp_month"] = "DC3", 1.0, 0.0, 0, 0
+
+
+@st.cache_data(show_spinner=False)
+def run_main(params: ScenarioParams, costs: CostAssumptions):
+    return run_scenario(load_sites(), params, costs)
+
+
+@st.cache_data(show_spinner=False)
+def _compare_cached(horizon: int, warn_pct: float, critical_pct: float, budget: float, costs: CostAssumptions):
+    base = ScenarioParams(horizon=horizon, warn_pct=warn_pct, critical_pct=critical_pct, budget_usd_m=budget)
+    return compare_presets(load_sites(), base, costs)
+
+
+def get_compare():
+    """Preset comparison. Depends only on horizon, thresholds, budget and unit costs, so growth changes reuse it."""
+    p = params_from_state()
+    return _compare_cached(p.horizon, p.warn_pct, p.critical_pct, p.budget_usd_m, costs_from_state())

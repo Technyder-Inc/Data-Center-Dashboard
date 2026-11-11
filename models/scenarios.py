@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from math import isfinite
 
 import pandas as pd
 
@@ -71,7 +72,7 @@ class ScenarioResult:
 
 def _evaluate(sites, params, expansions):
     p = replace(params, expansions=tuple(expansions))
-    fc = build_forecast(sites, p)
+    fc = build_forecast(sites, p, validate=False)
     ra = resource_analysis(fc, sites, p)
     return p, fc, ra, risk.site_summary(ra, fc, sites, p)
 
@@ -117,8 +118,8 @@ def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.Cos
     site_rep = validate_sites(sites)
     site_rep.raise_if_invalid()
     validate_params(params, sites["site_id"].tolist()).raise_if_invalid()
-    if min(costs.power_per_mw_usd_m, costs.cooling_per_mwe_usd_m, costs.per_rack_usd_m) < 0:
-        raise ValidationError(["Unit costs must not be negative"])
+    if any(not isfinite(v) or v < 0 for v in (costs.power_per_mw_usd_m, costs.cooling_per_mwe_usd_m, costs.per_rack_usd_m)):
+        raise ValidationError(["Unit costs must be finite and nonnegative"])
     sites = sites.reset_index(drop=True)
     warnings = list(site_rep.warnings)
 
@@ -175,7 +176,8 @@ def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.Cos
                 f"{s.site_id} still exhausts {s.first_limiting_resource} in month {int(s.earliest_exhaustion_month)} under this scenario."
             )
 
-    return ScenarioResult(p, costs, sites, fc, ra, ss, ps, pf, ranked, applied, manual_cost, funded_cost, recs, warnings)
+    # Keep requested inputs separate from funded expansions so results can be replayed.
+    return ScenarioResult(params, costs, sites, fc, ra, ss, ps, pf, ranked, applied, manual_cost, funded_cost, recs, warnings)
 
 
 def _whatif(sites, params, applied, ss, pf) -> dict:
@@ -185,17 +187,20 @@ def _whatif(sites, params, applied, ss, pf) -> dict:
         return out
     res = pf["earliest_resource"]
     if params.efficiency_pct < WHATIF_EFFICIENCY_PCT:
-        _, _, _, ss_e = _evaluate(sites, replace(params, efficiency_pct=WHATIF_EFFICIENCY_PCT), applied)
-        after = _site_row(ss_e, site)["earliest_exhaustion_month"]
+        _, _, ra_e, _ = _evaluate(sites, replace(params, efficiency_pct=WHATIF_EFFICIENCY_PCT), applied)
+        after = ra_e[(ra_e.site_id == site) & (ra_e.resource == res)]["first_exhaustion_month"].iloc[0]
         out["efficiency"] = {"site_id": site, "resource": res, "pct": WHATIF_EFFICIENCY_PCT,
                              "before": pf["earliest_month"], "after": None if pd.isna(after) else int(after)}
     mine = [e for e in applied if e.site_id == site]
     if mine:
         base = mine[0]
-        delayed = [replace(e, month=min(e.month + WHATIF_DELAY_MONTHS, 36)) if e is base else e for e in applied]
+        delay = min(WHATIF_DELAY_MONTHS, 36 - base.month)
+        if delay == 0:
+            return out
+        delayed = [replace(e, month=e.month + delay) if e is base else e for e in applied]
         _, fc_b, _, _ = _evaluate(sites, params, applied)
         _, fc_d, _, _ = _evaluate(sites, params, delayed)
-        out["delay"] = {"site_id": site, "delay": WHATIF_DELAY_MONTHS, "base_month": base.month,
+        out["delay"] = {"site_id": site, "delay": delay, "base_month": base.month,
                         "over_before": _months_over(fc_b, site, params.horizon),
                         "over_after": _months_over(fc_d, site, params.horizon)}
     return out

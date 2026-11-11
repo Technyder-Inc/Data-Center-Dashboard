@@ -2,9 +2,10 @@ import pandas as pd
 import streamlit as st
 
 from components import charts
-from components.kpi_cards import html_table, icon_kpi, risk_pill, simple_recs, util_tone
+from components.kpi_cards import chips, html_table, icon_kpi, risk_pill, simple_recs, util_tone
 from components.state import get_results
 from components.styles import GREEN, BLUE, page_header, panel_title
+from models.forecast import RESOURCE_META
 
 
 def render():
@@ -24,6 +25,21 @@ def render():
     ]
     for col, html in zip(st.columns(5), cards):
         col.markdown(html, unsafe_allow_html=True)
+    constraint = (f"{pf['earliest_site']} {pf['earliest_resource']}, month {pf['earliest_month']}"
+                  if pf['earliest_month'] is not None else f"None through month {H}")
+    aggregate = (f"{pf['aggregate_resource']}, month {pf['aggregate_month']}"
+                 if pf['aggregate_month'] is not None else f"None through month {H}")
+    chips([("Active scenario", p.name), ("Earliest site/resource exhaustion", constraint),
+           ("Aggregate exhaustion", aggregate), ("Portfolio risk", pf["portfolio_risk"]),
+           ("Sites approaching limits", f"{pf['sites_approaching']} / {pf['site_count']}"),
+           *[(f"Power demand M{m}", f"{pf[f'power_demand_month{m}']:.1f} MW") for m in (12, 24, 36)]])
+    with st.container(border=True):
+        panel_title("Current Resource Capacity and Headroom (Active Scenario)")
+        rows = [[meta["label"], meta["unit"], f"{pf[f'{res}_month0_capacity']:,.1f}",
+                 f"{pf[f'{res}_month0_demand']:,.1f}", f"{pf[f'{res}_month0_util_pct']:.1f}%",
+                 f"{pf[f'{res}_month0_headroom']:,.1f}"] for res, meta in RESOURCE_META.items()]
+        html_table([("Resource", False), ("Unit", False), ("Capacity", True), ("Demand / occupied", True),
+                    ("Utilization / occupancy", True), ("Headroom", True)], rows)
     st.write("")
 
     used, cap = pf["power_month0_demand"], pf["power_month0_capacity"]
@@ -47,7 +63,7 @@ def render():
                 f"Portfolio at {100 * used / cap:.1f}% utilization ({used:.1f} of {cap:.1f} MW)",
                 f"Demand projected to reach {pf['power_horizon_capacity']:.1f} MW in ~ {agg} months" if agg is not None
                 else f"Demand stays within {pf['power_horizon_capacity']:.1f} MW through {H} months",
-                f"{n} sites will exceed {p.warn_pct:g}% utilization within the forecast period",
+                f"{n} sites reach at least {p.warn_pct:g}% utilization within months 0 to {H}",
                 "Expansion or demand management recommended" if pf["portfolio_risk"] != "Low" else "No expansion needed within the forecast period",
             ]
             st.markdown("<ul class='insights'>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>", unsafe_allow_html=True)

@@ -2,7 +2,7 @@ import streamlit as st
 
 from components import charts
 from components.kpi_cards import recommendations_list, bullet_list, caption, chips, warning, html_table, month_text, risk_pill
-from components.state import GROWTH_MODES, apply_preset, get_results, mark_custom, reset_to_baseline, sync_thresholds
+from components.state import get_compare, GROWTH_MODES, apply_preset, get_results, mark_custom, reset_to_baseline, sync_thresholds
 from components.styles import page_header, panel_title
 from models.forecast import RESOURCE_META, effective_growth_pct
 from models.scenarios import OUTCOME, PRESETS, risk_indicators, scenario_insights
@@ -82,13 +82,15 @@ def render():
             rows = []
             for res, meta in RESOURCE_META.items():
                 u = meta["unit"]
-                f = lambda k, fmt="{:,.1f}": fmt.format(bp[k]) + " to " + fmt.format(pf[k])
+                def f(k, fmt="{:,.1f}"):
+                    return fmt.format(bp[k]) + " to " + fmt.format(pf[k])
                 rows.append([f"<b>{meta['label']}</b> ({u})", f(f"{res}_horizon_capacity"), f(f"{res}_horizon_demand"),
                              f(f"{res}_horizon_util_pct", "{:.1f}%"), f(f"{res}_horizon_headroom"),
                              month_text(bp["aggregate_exhaustion_by_resource"][res], "None") + " to " + month_text(pf["aggregate_exhaustion_by_resource"][res], "None")])
             html_table([("Resource", False), (f"Capacity M{H} (base to scenario)", True), (f"Demand M{H}", True), (f"Utilization M{H}", True),
                         (f"Headroom M{H}", True), ("Aggregate exhaustion", True)], rows)
-            res_label = st.segmented_control("Resource", ["Power", "Cooling", "Racks"], default="Power", key="ui_sp_res", label_visibility="collapsed") or "Power"
+            st.session_state.setdefault("ui_sp_res", "Power")
+            res_label = st.segmented_control("Resource", ["Power", "Cooling", "Racks"], key="ui_sp_res", label_visibility="collapsed") or "Power"
             c1, c2 = st.columns(2)
             c1.plotly_chart(charts.before_after(base.portfolio_series, r.portfolio_series, res_label.lower(), p), width="stretch")
             c2.plotly_chart(charts.peak_comparison(base.site_summary, r.site_summary, p), width="stretch")
@@ -110,7 +112,7 @@ def render():
         with st.container(border=True):
             panel_title(f"Scenario Comparison (M{H} Outlook)")
             rows = []
-            for c in st.session_state["_compare"].itertuples():
+            for c in get_compare().itertuples():
                 tone = OUTCOME[c.risk][1]
                 rows.append([("<b>" + c.scenario + "</b>") if c.scenario == p.name else c.scenario, f"+{c.capacity_added_mw:.1f} MW",
                              f"{c.utilization_pct:.1f}%", f"<span class='t-{'red' if c.headroom_mw < 0 else 'green'}'>{c.headroom_mw:+.1f} MW</span>",

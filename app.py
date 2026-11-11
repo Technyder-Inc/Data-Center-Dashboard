@@ -3,7 +3,7 @@ import streamlit as st
 
 from components import state
 from components.styles import inject_css, notice_bar
-from models.scenarios import baseline_like, compare_presets, run_scenario
+from models.scenarios import baseline_like
 from pages import capacity_forecasting, executive_decisions, executive_overview, scenario_planning
 from utils.validation import HORIZONS, ValidationError
 
@@ -29,7 +29,9 @@ def horizon_widget(container):
 
 def growth_widget(container):
     container.slider("Annual Demand Growth", 0.0, 60.0, step=1.0, format="%.0f%%", key="growth_override", on_change=state.set_growth,
-                     help="15% shows the dataset's own site growth rates until you move the slider; any other value applies to all sites.")
+                     help="Moving this slider applies its value to all sites, including 15%. Site-specific overrides still take precedence.")
+    mode = st.session_state["growth_mode"]
+    container.caption(f"Active growth mode: {mode}")
 
 
 def expansion_widget(container):
@@ -63,9 +65,8 @@ with st.sidebar:
 try:
     params = state.params_from_state()
     costs = state.costs_from_state()
-    st.session_state["_result"] = run_scenario(sites, params, costs)
-    st.session_state["_baseline"] = run_scenario(sites, baseline_like(params), costs)
-    st.session_state["_compare"] = compare_presets(sites, params, costs)
+    st.session_state["_result"] = state.run_main(params, costs)
+    st.session_state["_baseline"] = state.run_main(baseline_like(params), costs)
 except ValidationError as exc:
     st.error("Invalid inputs: " + "; ".join(exc.errors))
     st.stop()

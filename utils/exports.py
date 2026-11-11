@@ -37,8 +37,11 @@ def facility_frame(result) -> pd.DataFrame:
             row[f"{res}_baseline_capacity_{u}"] = a["baseline_capacity"]
             row[f"{res}_baseline_demand_{u}"] = a["baseline_demand"]
             row[f"{res}_month0_demand_{u}"] = a["month0_demand"]
+            row[f"{res}_month0_capacity_{u}"] = a["month0_capacity"]
+            row[f"{res}_month0_headroom_{u}"] = a["month0_capacity"] - a["month0_demand"]
             row[f"{res}_horizon_demand_{u}"] = a["horizon_demand"]
             row[f"{res}_horizon_capacity_{u}"] = a["horizon_capacity"]
+            row[f"{res}_horizon_headroom_{u}"] = a["horizon_headroom"]
             row[f"{res}_horizon_utilization_pct"] = a["horizon_util_pct"]
             row[f"{res}_peak_utilization_pct"] = a["peak_util_pct"]
             row[f"{res}_first_exhaustion_month"] = a["first_exhaustion_month"]
@@ -145,10 +148,16 @@ def capital_frame(result) -> pd.DataFrame:
                 "exhaustion_month_before": r.exhaustion_month_before, "exhaustion_month_after": r.exhaustion_month_after,
                 "limiting_resource_headroom_before": r.limiting_resource_headroom_before,
                 "limiting_resource_headroom_after": r.limiting_resource_headroom_after,
+                "limiting_resource_headroom_unit": RESOURCE_META[r.limiting_resource]["unit"],
+                "effect_basis": "candidate project added to active manual expansions; hypothetical even when unfunded",
                 "budget_usd_m": p.budget_usd_m,
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["scenario", "project_type", "site_id", "priority_rank",
+        "priority_score", "limiting_resource", "power_mw_added", "cooling_mwe_added", "racks_added",
+        "activation_month", "cost_usd_m", "funding_status", "exhaustion_month_before", "exhaustion_month_after",
+        "limiting_resource_headroom_before", "limiting_resource_headroom_after", "limiting_resource_headroom_unit",
+        "effect_basis", "budget_usd_m"])
 
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:

@@ -3,7 +3,7 @@ import streamlit as st
 
 from components import charts
 from components.kpi_cards import caption, md, text, warning, chips, html_table, kpi_card, kpi_row, month_text, recommendations_list, risk_pill
-from components.state import get_results, mark_custom
+from components.state import get_compare, get_results, mark_custom
 from components.styles import page_header, panel_title
 from models.scenarios import OUTCOME
 from models.capital import LEAD_TIME_MONTHS, WEIGHTS, expansion_cost
@@ -48,6 +48,7 @@ def render():
         else:
             caption("Funding selection shows what the budget would fund. It is applied to the forecast only when planned-project funding is enabled (Budget-Constrained preset).")
         if len(pr):
+            caption("After-project exhaustion and headroom are hypothetical for each candidate, including unfunded projects. Headroom uses the limiting resource's unit (MW, MWe, or racks).")
             rows = []
             for x in pr.itertuples():
                 tone = "green" if x.funding_status == "Funded" else "grey"
@@ -79,7 +80,7 @@ def render():
     with st.container(border=True):
         panel_title(f"What-If Analysis (M{H} Outcomes)")
         rows = []
-        for c in st.session_state["_compare"].itertuples():
+        for c in get_compare().itertuples():
             tone = OUTCOME[c.risk][1]
             rows.append([c.scenario, f"+{c.capacity_added_mw:.1f} MW", f"<span class='t-{'red' if c.utilization_pct > 100 else 'green'}'>{c.utilization_pct:.1f}%</span>",
                          f"${c.cost_usd_m:.1f}M", f"<span class='pill pill-{tone}'>{c.outcome}</span>"])
@@ -106,6 +107,12 @@ def render():
                    [[f"<b>{x['title']}</b><br><span class='kpi-sub'>{x['detail']}</span>", risk_pill(lvl.get(x["severity"], "Medium"))] for x in risky])
 
     funded_now = r.projects[r.projects["funding_status"] == "Funded"] if len(r.projects) else r.projects
+    decision_basis = repr((p, r.costs, funded_now.to_dict("records")))
+    if st.session_state.get("_decision_basis") != decision_basis:
+        for key in list(st.session_state):
+            if key.startswith("ui_req_") or key == "ui_approval":
+                del st.session_state[key]
+        st.session_state["_decision_basis"] = decision_basis
     d1, d2 = st.columns([3, 2])
     with d1, st.container(border=True):
         panel_title("Decision Requests")
@@ -124,6 +131,12 @@ def render():
             msg = (f"Fund {', '.join(funded_now['site_id'])} (${funded_now['cost_usd_m'].sum():.1f}M of ${p.budget_usd_m:.1f}M budget). "
                    + (f"Earliest constraint: {pf['earliest_site']} {pf['earliest_resource']} in month {pf['earliest_month']}. " if pf["earliest_month"] is not None else "")
                    + (f"Unfunded sites with modeled exhaustion: {', '.join(unf['site_id'])}." if len(unf) else "No unfunded site exhausts within the horizon."))
+            residual = funded_now[funded_now["exhaustion_month_after"].notna()]
+            if len(residual):
+                msg += " Funding does not eliminate all modeled exhaustion at " + ", ".join(residual.site_id) + "; review timing and residual resource constraints before approval."
+            no_fit = funded_now[funded_now["resource_fit_score"] == 0]
+            if len(no_fit):
+                msg += " Projects at " + ", ".join(no_fit.site_id) + " do not add the limiting resource; revise their scope."
         else:
             msg = "No planned project fits the budget; increase the budget or reduce project scope."
         text(msg)

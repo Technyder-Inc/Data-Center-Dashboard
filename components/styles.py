@@ -77,8 +77,16 @@ ul.insights { margin:.2rem 0 .5rem 1.1rem; padding:0; } ul.insights li { margin:
 .legend-lines { margin-top:.6rem; font-size:.95rem; line-height:1.9; }
 .legend-lines i { display:inline-block; width:14px; height:14px; border-radius:3px; margin-right:.5rem; vertical-align:-2px; }
 .rec-n.plain { background: transparent; border:2px solid var(--blue); color:#fff; }
-[data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"], [data-testid="stSidebarResizeHandle"] { display:none !important; }
-section[data-testid="stSidebar"] { transform:none !important; margin-left:0 !important; visibility:visible !important; width:290px !important; min-width:290px !important; max-width:290px !important; }
+@media (min-width:769px) {
+  [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"], [data-testid="stSidebarResizeHandle"] { display:none !important; }
+  section[data-testid="stSidebar"] { transform:none !important; margin-left:0 !important; visibility:visible !important; width:290px !important; min-width:290px !important; max-width:290px !important; }
+}
+@media (max-width:768px) {
+  .notice-bar > span { display:none; }
+  .notice-bar { left:3rem; right:3rem; font-size:.70rem; padding:0 .3rem; justify-content:center; pointer-events:none; }
+}
+.ikpi > div { min-width:0; }
+.ikpi-value { font-size:clamp(1.1rem, 1.7vw, 1.7rem); overflow-wrap:anywhere; }
 </style>
 """
 

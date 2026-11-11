@@ -9,6 +9,9 @@ from models.forecast import RESOURCE_META, RESOURCES, aggregate_exhaustion
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "info": 3}
 
 
+IMMEDIATE_MONTHS = 6
+
+
 def classify_risk(peak_pct: float, exhaustion_month, warn_pct: float, critical_pct: float) -> str:
     """Critical: demand exceeds capacity within the horizon. High: peak >= critical threshold.
     Medium: peak >= warning threshold. Low otherwise."""
@@ -22,43 +25,48 @@ def classify_risk(peak_pct: float, exhaustion_month, warn_pct: float, critical_p
 
 
 def site_summary(ra: pd.DataFrame, fc: pd.DataFrame, sites: pd.DataFrame, params) -> pd.DataFrame:
-    power_fc = fc[(fc["resource"] == "power")].set_index(["site_id", "month"])["demand"]
+    p = fc[(fc["resource"] == "power") & fc["month"].isin([12, 24, 36])]
+    power = {(sid, m): d for sid, m, d in zip(p["site_id"], p["month"], p["demand"])}
+    recs: dict[str, dict[str, dict]] = {}
+    for rec in ra.to_dict("records"):
+        recs.setdefault(rec["site_id"], {})[rec["resource"]] = rec
     rows = []
     for s in sites.itertuples():
-        r = ra[ra["site_id"] == s.site_id].set_index("resource").loc[list(RESOURCES)]
-        ex = r["first_exhaustion_month"].dropna()
-        if len(ex):
-            first_m = int(ex.min())
-            tied = ex[ex == first_m].index
-            limiting = max(tied, key=lambda x: (r.at[x, "peak_util_pct"], -RESOURCES.index(x)))
+        r = recs[s.site_id]
+        ex = {x: r[x]["first_exhaustion_month"] for x in RESOURCES if not pd.isna(r[x]["first_exhaustion_month"])}
+        peak_key = lambda x: (r[x]["peak_util_pct"], -RESOURCES.index(x))  # noqa: E731
+        if ex:
+            first_m = int(min(ex.values()))
+            limiting = max((x for x in ex if ex[x] == first_m), key=peak_key)
             basis = "exhaustion"
         else:
             first_m = None
-            limiting = max(RESOURCES, key=lambda x: (r.at[x, "peak_util_pct"], -RESOURCES.index(x)))
+            limiting = max(RESOURCES, key=peak_key)
             basis = "peak utilization"
-        peak_res = max(RESOURCES, key=lambda x: (r.at[x, "peak_util_pct"], -RESOURCES.index(x)))
-        peak = float(r.at[peak_res, "peak_util_pct"])
-        warn = r["first_warning_month"].dropna()
+        peak_res = max(RESOURCES, key=peak_key)
+        peak = float(r[peak_res]["peak_util_pct"])
+        warns = [int(r[x]["first_warning_month"]) for x in RESOURCES if not pd.isna(r[x]["first_warning_month"])]
         row = {
             "site_id": s.site_id,
             "site_name": s.site_name,
             "location": s.location,
             "risk_level": classify_risk(peak, first_m, params.warn_pct, params.critical_pct),
             "first_limiting_resource": limiting,
+            "limiting_peak_util_pct": float(r[limiting]["peak_util_pct"]),
             "limiting_basis": basis,
             "earliest_exhaustion_month": first_m,
-            "first_warning_month": int(warn.min()) if len(warn) else None,
+            "first_warning_month": min(warns) if warns else None,
             "peak_util_pct": peak,
             "peak_resource": peak_res,
-            "peak_month": int(r.at[peak_res, "peak_month"]),
-            "power_demand_month12_mw": float(power_fc.loc[(s.site_id, 12)]),
-            "power_demand_month24_mw": float(power_fc.loc[(s.site_id, 24)]),
-            "power_demand_month36_mw": float(power_fc.loc[(s.site_id, 36)]),
+            "peak_month": int(r[peak_res]["peak_month"]),
+            "power_demand_month12_mw": float(power[(s.site_id, 12)]),
+            "power_demand_month24_mw": float(power[(s.site_id, 24)]),
+            "power_demand_month36_mw": float(power[(s.site_id, 36)]),
         }
         for res in RESOURCES:
-            row[f"{res}_util_month0_pct"] = float(r.at[res, "month0_util_pct"])
-            row[f"{res}_util_horizon_pct"] = float(r.at[res, "horizon_util_pct"])
-            row[f"{res}_exhaustion_month"] = r.at[res, "first_exhaustion_month"]
+            row[f"{res}_util_month0_pct"] = float(r[res]["month0_util_pct"])
+            row[f"{res}_util_horizon_pct"] = float(r[res]["horizon_util_pct"])
+            row[f"{res}_exhaustion_month"] = r[res]["first_exhaustion_month"]
         rows.append(row)
     df = pd.DataFrame(rows)
     df["earliest_exhaustion_month"] = df["earliest_exhaustion_month"].astype("Int64")
@@ -150,21 +158,29 @@ def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, ap
             cap = float(sites.set_index("site_id").at[s.site_id, RESOURCE_META[res]["cap"]])
             if res == "cooling":
                 add("critical" if m < 18 else "high", f"{s.site_id} approaching cooling limit",
-                    f"Cooling demand exceeds capacity in month {m} (baseline cooling capacity {cap:.1f} {unit}, peak {s.peak_util_pct:.1f}%).",
+                    f"Cooling demand exceeds capacity in month {m} (baseline cooling capacity {cap:.1f} {unit}, cooling peak {s.limiting_peak_util_pct:.1f}%).",
                     s.site_id, res, m)
             elif res == "power":
                 when = "before month 18" if m < 18 else f"in month {m}"
                 add("critical" if m < 18 else "high", f"{s.site_id} needs electrical capacity {when}",
-                    f"Power demand exceeds capacity in month {m} (baseline capacity {cap:.1f} {unit}, peak {s.peak_util_pct:.1f}%).",
+                    f"Power demand exceeds capacity in month {m} (baseline capacity {cap:.1f} {unit}, power peak {s.limiting_peak_util_pct:.1f}%).",
                     s.site_id, res, m)
             else:
                 add("critical" if m < 18 else "high", f"{s.site_id} rack capacity exhausted",
-                    f"Occupied racks exceed {cap:.0f} racks in month {m} (peak {s.peak_util_pct:.1f}%).",
+                    f"Rack demand exceeds capacity in month {m} (baseline {cap:.0f} racks, rack peak {s.limiting_peak_util_pct:.1f}%).",
                     s.site_id, res, m)
         elif s.peak_util_pct >= params.warn_pct - 1e-9:
             add("medium", f"{s.site_id} {label.lower()} nearing threshold",
                 f"{label} utilization peaks at {s.peak_util_pct:.1f}% in month {s.peak_month}, above the {params.warn_pct:g}% warning threshold.",
                 s.site_id, s.peak_resource, int(s.peak_month))
+
+    planned = sites.set_index("site_id")["expansion_activation_month"]
+    for s in ss_sorted.itertuples():
+        if not pd.isna(s.earliest_exhaustion_month) and int(s.earliest_exhaustion_month) <= IMMEDIATE_MONTHS:
+            m = int(s.earliest_exhaustion_month)
+            add("critical", f"{s.site_id} requires immediate attention",
+                f"{s.first_limiting_resource.title()} demand exceeds capacity by month {m}, inside the {IMMEDIATE_MONTHS}-month immediate window; "
+                f"the planned expansion would activate in month {int(planned[s.site_id])}.", s.site_id, s.first_limiting_resource, m)
 
     if pf["earliest_month"] is not None:
         res = pf["earliest_resource"]
@@ -185,11 +201,15 @@ def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, ap
         needed = ranked[ranked["exhaustion_month_before"].notna()].sort_values("exhaustion_month_before")
         if len(needed):
             parts = [
-                f"{r.site_id} by month {max(0, int(r.exhaustion_month_before) - LEAD_TIME_MONTHS)} (exhaustion month {int(r.exhaustion_month_before)})"
+                f"{r.site_id} {r.limiting_resource}: begin by month {max(0, int(r.exhaustion_month_before) - LEAD_TIME_MONTHS)}, "
+                f"commission by month {int(r.exhaustion_month_before)} (candidate activates month {r.activation_month}; "
+                f"{'fits budget' if r.funding_status == 'Funded' else 'unfunded'}; "
+                f"{'adds limiting resource' if r.resource_fit_score > 0 else 'does not address limiting resource'})"
                 for r in needed.itertuples()
             ]
             add("high", "Recommended expansion schedule",
-                "Activate " + "; ".join(parts) + f". Assumes a {LEAD_TIME_MONTHS}-month commissioning lead time.")
+                "; ".join(parts) + f". Assumes a {LEAD_TIME_MONTHS}-month commissioning lead time. "
+                "Candidate quantities and residual constraints must be reviewed; commissioning does not guarantee all limits are removed.")
         unfunded = ranked[ranked["funding_status"] == "Unfunded"]
         funded_cost = float(ranked.loc[ranked["funding_status"] == "Funded", "cost_usd_m"].sum())
         if len(unfunded) and params.fund_planned_projects:
