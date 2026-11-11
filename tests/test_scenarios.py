@@ -99,15 +99,3 @@ def test_csv_exports_consistent_with_dashboard(sites):
     for kind in ("facility", "forecast", "scenario", "capital"):
         assert exports.filename(r, kind) == f"capacity_{kind}_infrastructure_expansion_24m.csv"
     assert exports.to_csv_bytes(fac).startswith(b"scenario,")
-
-
-def test_compare_presets_and_risk_indicators(sites):
-    from models.capital import CostAssumptions
-    from models.scenarios import compare_presets, risk_indicators
-    c = compare_presets(sites, ScenarioParams(horizon=24), CostAssumptions())
-    assert list(c.scenario) == list(PRESETS)
-    base = c.iloc[0]
-    assert base.capacity_added_mw == 0 and base.cost_usd_m == 0
-    assert c.set_index("scenario").at["Efficiency Optimization", "demand_mw"] == pytest.approx(0.9 * base.demand_mw)
-    ind = risk_indicators(run_scenario(sites, preset_params("Baseline")))
-    assert [i[0] for i in ind][-1] == "Capital budget" and len(ind) == 5

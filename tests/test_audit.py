@@ -148,3 +148,22 @@ def test_methodology_worked_case_and_immediate_attention(sites):
     hot = run_scenario(sites, ScenarioParams(growth_mode="override", growth_value_pct=45.0))
     imm = [x for x in hot.recommendations if "immediate attention" in x["title"]]
     assert imm and imm[0]["severity"] == "critical" and imm[0]["month"] <= 6
+
+
+def test_expansion_impact_and_multiple_expansions(sites):
+    from components import state
+    from models.forecast import Expansion, ScenarioParams
+    from models.scenarios import baseline_like, run_scenario
+    base = run_scenario(sites, ScenarioParams())
+    power = run_scenario(sites, ScenarioParams(expansions=(Expansion("DC3", power_mw=1.0, month=0),)))
+    note = state.expansion_impact(power, base)
+    assert "+1 MW" in note and "stays month 12" in note and "first limit is cooling" in note
+    cooling = run_scenario(sites, ScenarioParams(expansions=(Expansion("DC3", cooling_mwe=4.0, month=0),)))
+    note = state.expansion_impact(cooling, base)
+    assert "+4 MWe" in note and "moves from month 12" in note
+    both = run_scenario(sites, ScenarioParams(expansions=(Expansion("DC3", cooling_mwe=4.0, month=0), Expansion("DC4", power_mw=2.0, month=0))))
+    note = state.expansion_impact(both, base)
+    assert "2 expansions" in note and "DC3, DC4" in note and "+2 MW" in note and "+4 MWe" in note
+    other = run_scenario(sites, ScenarioParams(expansions=(Expansion("DC1", power_mw=2.0, month=0),)))
+    assert "No expansion targets DC3" in state.expansion_impact(other, base)
+    assert state.expansion_impact(base, baseline_like(base.params)) is None

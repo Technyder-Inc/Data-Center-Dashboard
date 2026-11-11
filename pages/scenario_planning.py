@@ -1,11 +1,14 @@
 import streamlit as st
 
 from components import charts
-from components.kpi_cards import recommendations_list, bullet_list, caption, chips, warning, html_table, month_text, risk_pill
-from components.state import get_compare, GROWTH_MODES, apply_preset, get_results, mark_custom, reset_to_baseline, sync_thresholds
+from components.kpi_cards import util_cell, bullet_list, caption, chips, warning, html_table, month_text, risk_pill
+from components.editors import edit_assumptions
+from components.expansions import expansion_list
+from components.state import add_expansion_from_page, get_assumptions, GROWTH_MODES, apply_preset, get_results, mark_custom, reset_to_baseline, sync_thresholds
+from utils.validation import LIMITS
 from components.styles import page_header, panel_title
 from models.forecast import RESOURCE_META, effective_growth_pct
-from models.scenarios import OUTCOME, PRESETS, risk_indicators, scenario_insights
+from models.scenarios import PRESETS, scenario_insights
 
 
 def _sync_growth():
@@ -26,31 +29,41 @@ def _controls(sites):
         panel_title("Demand Growth")
         st.selectbox("Portfolio growth assumption", list(GROWTH_MODES.values()), key="growth_mode", on_change=mark_custom)
         if ss["growth_mode"] == GROWTH_MODES["adjust"]:
-            st.slider("Adjustment to every site's rate (percentage points)", -10.0, 25.0, step=0.5, key="growth_adjust", on_change=mark_custom)
+            st.slider("Adjustment to every site's rate (percentage points)", *LIMITS["growth_adjust_pts"], step=0.5, key="growth_adjust", on_change=mark_custom)
         elif ss["growth_mode"] == GROWTH_MODES["override"]:
             ss["ui_sp_growth"] = ss["growth_override"]
-            st.slider("Annual growth applied to all sites (%)", 0.0, 60.0, step=0.5, key="ui_sp_growth", on_change=_sync_growth)
+            st.slider("Annual growth applied to all sites (%)", *LIMITS["portfolio_growth_pct"], step=0.5, key="ui_sp_growth", on_change=_sync_growth)
         st.multiselect("Sites with a site-specific growth override", ids, key="override_sites", on_change=mark_custom,
                        help="A site override always wins over the portfolio assumption.")
         for sid in ss["override_sites"]:
-            st.number_input(f"{sid} annual growth (%)", -50.0, 100.0, step=0.5, key=f"sg_{sid}", on_change=mark_custom)
+            st.number_input(f"{sid} annual growth (%)", *LIMITS["growth_pct"], step=0.5, key=f"sg_{sid}", on_change=mark_custom)
     with st.container(border=True):
         panel_title("Infrastructure Expansion")
-        st.selectbox("Facility", ids, key="exp_site", on_change=mark_custom)
+        st.caption("Add one expansion per facility and activation month. Each stays in the plan until you remove it.")
+        st.selectbox("Facility", ids, key="exp_site")
         a, b = st.columns(2)
-        a.number_input("Power (MW)", 0.0, 50.0, step=0.5, key="exp_power", on_change=mark_custom)
-        b.number_input("Cooling (MWe)", 0.0, 50.0, step=0.5, key="exp_cooling", on_change=mark_custom)
+        a.number_input("Power (MW)", *LIMITS["expansion_power_mw"], step=0.5, key="exp_power")
+        b.number_input("Cooling (MWe)", *LIMITS["expansion_cooling_mwe"], step=0.5, key="exp_cooling")
         c, d = st.columns(2)
-        c.number_input("Racks", 0, 2000, step=10, key="exp_racks", on_change=mark_custom)
-        d.number_input("Activation month", 0, 36, step=1, key="exp_month", on_change=mark_custom)
+        c.number_input("Racks", *LIMITS["expansion_racks"], step=10, key="exp_racks")
+        d.number_input("Activation month", *LIMITS["month"], step=1, key="exp_month")
+        st.button("Add expansion", key="pg_add_exp", on_click=add_expansion_from_page, width="stretch")
+        expansion_list(st, "pg")
+    with st.container(border=True):
+        panel_title("Model Assumptions")
+        a = get_assumptions()
+        st.caption(f"High Growth {a.high_growth_pct:g}% | Efficiency -{a.efficiency_pct:g}% | Lead time {a.lead_time_months} months | "
+                   f"Ranking weights {a.weight_timing:g}/{a.weight_peak:g}/{a.weight_risk:g}/{a.weight_fit:g}/{a.weight_cost:g}")
+        if st.button("Edit assumptions", key="sp_edit_assump", width="stretch"):
+            edit_assumptions()
     with st.container(border=True):
         panel_title("Efficiency, Budget, Thresholds")
-        st.slider("Operational efficiency: demand reduction (%)", 0, 30, key="efficiency", on_change=mark_custom,
+        st.slider("Operational efficiency: demand reduction (%)", *LIMITS["efficiency_pct"], step=0.5, key="efficiency", on_change=mark_custom,
                   help="Applied equally to power, cooling and rack demand (documented simplification).")
-        st.number_input("Capital investment budget (USD millions)", 0.0, 1000.0, step=5.0, key="budget", on_change=mark_custom)
+        st.number_input("Capital investment budget (USD millions)", *LIMITS["budget_usd_m"], step=5.0, key="budget", on_change=mark_custom)
         st.checkbox("Fund prioritized planned projects within budget", key="fund_projects", on_change=mark_custom)
-        st.slider("Warning threshold (%)", 50, 99, key="warn_pct", on_change=lambda: (sync_thresholds("warn_pct"), mark_custom()))
-        st.slider("Critical threshold (%)", 51, 100, key="crit_pct", on_change=lambda: (sync_thresholds("crit_pct"), mark_custom()))
+        st.slider("Warning threshold (%)", *LIMITS["warn_pct"], key="warn_pct", on_change=lambda: (sync_thresholds("warn_pct"), mark_custom()))
+        st.slider("Critical threshold (%)", *LIMITS["critical_pct"], key="crit_pct", on_change=lambda: (sync_thresholds("crit_pct"), mark_custom()))
 
 
 def render():
@@ -103,32 +116,11 @@ def render():
                 bs = b.loc[s.site_id]
                 rows.append([f"<b>{s.site_id}</b>", f"{bs['first_limiting_resource'].title()}: {month_text(bs['earliest_exhaustion_month'], 'None')}",
                              f"{s.first_limiting_resource.title()}: {month_text(s.earliest_exhaustion_month, 'None')}",
-                             f"{bs['peak_util_pct']:.1f}%", f"{s.peak_util_pct:.1f}%", risk_pill(bs["risk_level"]), risk_pill(s.risk_level)])
+                             util_cell(bs['peak_util_pct'], p.warn_pct), util_cell(s.peak_util_pct, p.warn_pct), risk_pill(bs["risk_level"]), risk_pill(s.risk_level)])
                 if s.site_id == pf["earliest_site"]:
                     hl.add(i)
             html_table([("Site", False), ("Baseline first limit", False), ("Scenario first limit", False), ("Baseline peak", True), ("Scenario peak", True),
                         ("Baseline risk", False), ("Scenario risk", False)], rows, hl)
-
-        with st.container(border=True):
-            panel_title(f"Scenario Comparison (M{H} Outlook)")
-            rows = []
-            for c in get_compare().itertuples():
-                tone = OUTCOME[c.risk][1]
-                rows.append([("<b>" + c.scenario + "</b>") if c.scenario == p.name else c.scenario, f"+{c.capacity_added_mw:.1f} MW",
-                             f"{c.utilization_pct:.1f}%", f"<span class='t-{'red' if c.headroom_mw < 0 else 'green'}'>{c.headroom_mw:+.1f} MW</span>",
-                             month_text(c.earliest_month, "None"), month_text(c.aggregate_month, "None"), f"${c.cost_usd_m:.1f}M",
-                             f"<span class='pill pill-{tone}'>{c.outcome}</span>"])
-            html_table([("Scenario", False), ("Capacity added", True), ("Utilization", True), ("Headroom", True),
-                        ("First site limit", False), ("Aggregate exhaustion", False), ("Capital", True), ("Outcome", False)], rows)
-            caption("Presets at default settings for the active horizon, thresholds and budget. The active scenario above may differ if you customized controls.")
-        r1, r2 = st.columns(2)
-        with r1, st.container(border=True):
-            panel_title("Risk Indicators")
-            html_table([("Indicator", False), ("Level", False), ("Evidence", False)],
-                       [[n, risk_pill(lv), ev] for n, lv, ev in risk_indicators(r)])
-        with r2, st.container(border=True):
-            panel_title("Recommended Actions")
-            recommendations_list(r.recommendations[:4])
 
         c1, c2 = st.columns(2)
         with c1, st.container(border=True):
@@ -141,5 +133,5 @@ def render():
                        f"Remaining: ${p.budget_usd_m - used:.1f}M. Manual expansion ${r.manual_cost_usd_m:.1f}M; funded planned projects ${r.funded_cost_usd_m:.1f}M.")
             caption(f"Remaining electrical headroom at month {H}: {pf['power_horizon_headroom']:.1f} MW (baseline {bp['power_horizon_headroom']:.1f} MW).")
         with c2, st.container(border=True):
-            panel_title("Scenario Insights")
+            panel_title("Scenario Insights", "info")
             bullet_list(scenario_insights(base, r))

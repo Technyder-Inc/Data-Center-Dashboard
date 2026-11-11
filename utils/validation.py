@@ -36,6 +36,47 @@ POSITIVE_COLUMNS = ["electrical_capacity_mw", "cooling_capacity_mwe", "rack_capa
 INTEGER_COLUMNS = ["rack_capacity", "occupied_racks", "planned_additional_racks", "expansion_activation_month"]
 GROWTH_RANGE = (-50.0, 100.0)
 
+# One table of numeric bounds, used by every input widget, the facility grid and the server-side checks.
+LIMITS = {
+    "portfolio_growth_pct": (0.0, 60.0),
+    "growth_pct": GROWTH_RANGE,
+    "growth_adjust_pts": (-10.0, 25.0),
+    "efficiency_pct": (0.0, 60.0),
+    "expansion_power_mw": (0.0, 100.0),
+    "expansion_cooling_mwe": (0.0, 100.0),
+    "expansion_racks": (0, 5000),
+    "month": (0, MAX_MONTH),
+    "budget_usd_m": (0.0, 1000.0),
+    "warn_pct": (50, 99),
+    "critical_pct": (51, 100),
+    "cost_per_mw": (0.0, 100.0),
+    "cost_per_mwe": (0.0, 100.0),
+    "cost_per_rack": (0.0, 5.0),
+    "capacity_mw": (0.0, 500.0),
+    "demand_mw": (0.0, 1000.0),
+    "rack_capacity": (0, 50000),
+    "occupied_racks": (0, 100000),
+    "project_cost_usd_m": (0.0, 100000.0),
+}
+SITE_COLUMN_LIMITS = {
+    "electrical_capacity_mw": "capacity_mw", "cooling_capacity_mwe": "capacity_mw",
+    "electrical_demand_mw": "demand_mw", "cooling_demand_mwe": "demand_mw",
+    "rack_capacity": "rack_capacity", "occupied_racks": "occupied_racks",
+    "annual_growth_pct": "growth_pct",
+    "planned_power_expansion_mw": "expansion_power_mw", "planned_cooling_expansion_mwe": "expansion_cooling_mwe",
+    "planned_additional_racks": "expansion_racks", "expansion_activation_month": "month",
+    "estimated_project_cost_usd_m": "project_cost_usd_m",
+}
+
+
+def bounds(name: str) -> tuple:
+    return LIMITS[name]
+
+
+def _within(value, name: str) -> bool:
+    lo, hi = LIMITS[name]
+    return lo <= value <= hi
+
 
 class ValidationError(ValueError):
     def __init__(self, errors: list[str]):
@@ -92,17 +133,15 @@ def validate_sites(df: pd.DataFrame) -> ValidationReport:
         bad = df.loc[num[col] <= 0, "site_id"].tolist()
         if bad:
             rep.errors.append(f"{col} must be greater than zero (sites: {', '.join(bad)})")
-    lo, hi = GROWTH_RANGE
-    bad = df.loc[(num["annual_growth_pct"] < lo) | (num["annual_growth_pct"] > hi), "site_id"].tolist()
-    if bad:
-        rep.errors.append(f"annual_growth_pct must be within {lo:g} to {hi:g} (sites: {', '.join(bad)})")
+    for col, limit in SITE_COLUMN_LIMITS.items():
+        lo, hi = LIMITS[limit]
+        bad = df.loc[(num[col] < lo) | (num[col] > hi), "site_id"].tolist()
+        if bad:
+            rep.errors.append(f"{col} must be within {lo:g} to {hi:g} (sites: {', '.join(bad)})")
     for col in INTEGER_COLUMNS:
         bad = df.loc[(num[col] % 1) != 0, "site_id"].tolist()
         if bad:
             rep.errors.append(f"{col} must be a whole number (sites: {', '.join(bad)})")
-    bad = df.loc[num["expansion_activation_month"] > MAX_MONTH, "site_id"].tolist()
-    if bad:
-        rep.errors.append(f"expansion_activation_month must be 0 to {MAX_MONTH} (sites: {', '.join(bad)})")
     if rep.errors:
         return rep
 
@@ -131,27 +170,41 @@ def validate_params(params, site_ids: list[str]) -> ValidationReport:
         rep.errors.append(f"Horizon must be one of {', '.join(map(str, HORIZONS))} months")
     if params.growth_mode not in ("site", "adjust", "override"):
         rep.errors.append("growth_mode must be 'site', 'adjust' or 'override'")
-    lo, hi = GROWTH_RANGE
-    if params.growth_mode == "override" and not lo <= params.growth_value_pct <= hi:
-        rep.errors.append(f"Portfolio growth must be within {lo:g} to {hi:g} percent")
+    if params.growth_mode == "override" and not _within(params.growth_value_pct, "portfolio_growth_pct"):
+        rep.errors.append("Portfolio growth must be within %g to %g percent" % LIMITS["portfolio_growth_pct"])
+    if params.growth_mode == "adjust" and not _within(params.growth_value_pct, "growth_adjust_pts"):
+        rep.errors.append("Portfolio growth adjustment must be within %g to %g points" % LIMITS["growth_adjust_pts"])
     for sid, val in params.site_growth_overrides.items():
         if sid not in site_ids:
             rep.errors.append(f"Growth override for unknown site {sid}")
-        elif not lo <= val <= hi:
-            rep.errors.append(f"{sid} growth override must be within {lo:g} to {hi:g} percent")
-    if not 0 <= params.efficiency_pct < 100:
-        rep.errors.append("Efficiency improvement must be at least 0 and below 100 percent")
-    if params.budget_usd_m < 0:
-        rep.errors.append("Budget must not be negative")
-    if not 0 < params.warn_pct < params.critical_pct <= 100:
-        rep.errors.append("Thresholds must satisfy 0 < warning < critical <= 100")
+        elif not _within(val, "growth_pct"):
+            rep.errors.append(f"{sid} growth override must be within %g to %g percent" % LIMITS["growth_pct"])
+    if not _within(params.efficiency_pct, "efficiency_pct"):
+        rep.errors.append("Efficiency improvement must be within %g to %g percent" % LIMITS["efficiency_pct"])
+    if not _within(params.budget_usd_m, "budget_usd_m"):
+        rep.errors.append("Budget must be within %g to %g USD millions" % LIMITS["budget_usd_m"])
+    if not (_within(params.warn_pct, "warn_pct") and _within(params.critical_pct, "critical_pct") and params.warn_pct < params.critical_pct):
+        rep.errors.append("Thresholds must satisfy warning %g to %g, critical %g to %g, and warning below critical" % (*LIMITS["warn_pct"], *LIMITS["critical_pct"]))
     for e in params.expansions:
         if e.site_id not in site_ids:
             rep.errors.append(f"Expansion references unknown site {e.site_id}")
-        if min(e.power_mw, e.cooling_mwe, e.racks) < 0:
-            rep.errors.append(f"Expansion for {e.site_id} contains negative capacity")
-        if not 0 <= e.month <= MAX_MONTH or e.month % 1:
-            rep.errors.append(f"Expansion activation month for {e.site_id} must be 0 to {MAX_MONTH}")
+        for value, name, label in ((e.power_mw, "expansion_power_mw", "power"), (e.cooling_mwe, "expansion_cooling_mwe", "cooling"),
+                                   (e.racks, "expansion_racks", "racks")):
+            if not _within(value, name):
+                rep.errors.append(f"Expansion {label} for {e.site_id} must be within %g to %g" % LIMITS[name])
+        if not _within(e.month, "month") or e.month % 1:
+            rep.errors.append(f"Expansion activation month for {e.site_id} must be a whole number from 0 to {MAX_MONTH}")
         if e.racks % 1:
             rep.errors.append(f"Expansion racks for {e.site_id} must be a whole number")
     return rep
+
+
+def validate_costs(costs) -> list[str]:
+    """Unit costs (USD millions) must be finite and within bounds."""
+    errors = []
+    for value, name, label in ((costs.power_per_mw_usd_m, "cost_per_mw", "power cost per MW"),
+                               (costs.cooling_per_mwe_usd_m, "cost_per_mwe", "cooling cost per MWe"),
+                               (costs.per_rack_usd_m, "cost_per_rack", "cost per rack")):
+        if not isinstance(value, (int, float, np.number)) or not isfinite(value) or not _within(value, name):
+            errors.append(f"{label[0].upper() + label[1:]} must be within %g to %g USD millions" % LIMITS[name])
+    return errors

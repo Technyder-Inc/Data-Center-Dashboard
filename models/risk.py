@@ -141,7 +141,8 @@ def portfolio_summary(ps: pd.DataFrame, ss: pd.DataFrame, sites: pd.DataFrame, p
     return out
 
 
-def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, applied) -> list[dict]:
+def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, applied,
+                          lead_time: int = LEAD_TIME_MONTHS, immediate_months: int = IMMEDIATE_MONTHS) -> list[dict]:
     """Deterministic rules. Every item cites a modeled site, resource, percentage, month or cost."""
     H = params.horizon
     recs: list[dict] = []
@@ -176,10 +177,10 @@ def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, ap
 
     planned = sites.set_index("site_id")["expansion_activation_month"]
     for s in ss_sorted.itertuples():
-        if not pd.isna(s.earliest_exhaustion_month) and int(s.earliest_exhaustion_month) <= IMMEDIATE_MONTHS:
+        if not pd.isna(s.earliest_exhaustion_month) and int(s.earliest_exhaustion_month) <= immediate_months:
             m = int(s.earliest_exhaustion_month)
             add("critical", f"{s.site_id} requires immediate attention",
-                f"{s.first_limiting_resource.title()} demand exceeds capacity by month {m}, inside the {IMMEDIATE_MONTHS}-month immediate window; "
+                f"{s.first_limiting_resource.title()} demand exceeds capacity by month {m}, inside the {immediate_months}-month immediate window; "
                 f"the planned expansion would activate in month {int(planned[s.site_id])}.", s.site_id, s.first_limiting_resource, m)
 
     if pf["earliest_month"] is not None:
@@ -201,14 +202,14 @@ def build_recommendations(sites, params, ss, pf, ranked, whatif, manual_cost, ap
         needed = ranked[ranked["exhaustion_month_before"].notna()].sort_values("exhaustion_month_before")
         if len(needed):
             parts = [
-                f"{r.site_id} {r.limiting_resource}: begin by month {max(0, int(r.exhaustion_month_before) - LEAD_TIME_MONTHS)}, "
+                f"{r.site_id} {r.limiting_resource}: begin by month {max(0, int(r.exhaustion_month_before) - lead_time)}, "
                 f"commission by month {int(r.exhaustion_month_before)} (candidate activates month {r.activation_month}; "
                 f"{'fits budget' if r.funding_status == 'Funded' else 'unfunded'}; "
                 f"{'adds limiting resource' if r.resource_fit_score > 0 else 'does not address limiting resource'})"
                 for r in needed.itertuples()
             ]
             add("high", "Recommended expansion schedule",
-                "; ".join(parts) + f". Assumes a {LEAD_TIME_MONTHS}-month commissioning lead time. "
+                "; ".join(parts) + f". Assumes a {lead_time}-month commissioning lead time. "
                 "Candidate quantities and residual constraints must be reviewed; commissioning does not guarantee all limits are removed.")
         unfunded = ranked[ranked["funding_status"] == "Unfunded"]
         funded_cost = float(ranked.loc[ranked["funding_status"] == "Funded", "cost_usd_m"].sum())

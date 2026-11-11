@@ -2,8 +2,9 @@ import pandas as pd
 import streamlit as st
 
 from components import charts
-from components.kpi_cards import chips, html_table, month_text, risk_pill
-from components.state import get_results
+from components.editors import edit_facility_data
+from components.kpi_cards import util_cell, chips, html_table, month_text, risk_pill
+from components.state import get_results, sites_edited
 from components.styles import page_header, panel_title
 from models.forecast import RESOURCE_META
 
@@ -36,6 +37,11 @@ def render():
 
     with st.container(border=True):
         panel_title("Facility Data and Planned Expansion (synthetic baseline)")
+        edit_col, note_col = st.columns([1, 3], vertical_alignment="center")
+        if edit_col.button("Edit facility data", key="fc_edit", width="stretch"):
+            edit_facility_data()
+        note_col.caption("Edited in this session. Exports and every page use these values." if sites_edited()
+                         else "Values come from data/synthetic_sites.csv. Use Edit facility data to change any of them.")
         cost = r.projects.set_index("site_id")["cost_usd_m"] if len(r.projects) else pd.Series(dtype=float)
         fd = r.sites[r.sites["site_id"].isin(sel)]
         st.dataframe(pd.DataFrame({
@@ -58,7 +64,7 @@ def render():
             warn = month_text(s.first_warning_month, "Not reached")
             basis = "first exhaustion" if s.limiting_basis == "exhaustion" else "highest peak utilization (no exhaustion)"
             rows.append([f"<b>{s.site_id}</b>", s.first_limiting_resource.title(), basis, ex, warn,
-                         f"{s.peak_util_pct:.1f}% ({s.peak_resource}, month {s.peak_month})", risk_pill(s.risk_level)])
+                         f"{util_cell(s.peak_util_pct, p.warn_pct)} ({s.peak_resource}, month {s.peak_month})", risk_pill(s.risk_level)])
             if s.site_id == r.portfolio["earliest_site"]:
                 hl.add(i)
         html_table([("Site", False), ("First limiting resource", False), ("Basis", False), ("Exhaustion", False),

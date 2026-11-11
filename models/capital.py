@@ -45,10 +45,13 @@ def planned_projects(sites: pd.DataFrame, costs: CostAssumptions) -> pd.DataFram
     return df
 
 
-def prioritize(projects: pd.DataFrame, site_summary: pd.DataFrame, horizon: int) -> pd.DataFrame:
+def prioritize(projects: pd.DataFrame, site_summary: pd.DataFrame, horizon: int, weights: dict | None = None,
+               risk_scores: dict | None = None) -> pd.DataFrame:
     """Score each project 0-100 using documented weights, rank descending (ties by site_id)."""
     if projects.empty:
         return projects.assign(priority_score=[], priority_rank=[])
+    weights = weights or WEIGHTS
+    risk_scores = risk_scores or RISK_SCORE
     ss = site_summary.set_index("site_id")
     max_cost = max(projects["cost_usd_m"].max(), 1e-9)
     rows = []
@@ -57,15 +60,15 @@ def prioritize(projects: pd.DataFrame, site_summary: pd.DataFrame, horizon: int)
         m = s["earliest_exhaustion_month"]
         timing = 0.0 if pd.isna(m) else 100.0 * (1.0 - float(m) / horizon)
         peak = min(max((float(s["peak_util_pct"]) - 50.0) / 50.0, 0.0), 1.0) * 100.0
-        risk = RISK_SCORE[s["risk_level"]]
+        risk = risk_scores[s["risk_level"]]
         fit = 100.0 if getattr(p, RESOURCE_FIELD[s["first_limiting_resource"]]) > 0 else 0.0
         cost = 100.0 * (1.0 - p.cost_usd_m / max_cost)
         score = (
-            WEIGHTS["timing"] * timing
-            + WEIGHTS["peak_utilization"] * peak
-            + WEIGHTS["risk_level"] * risk
-            + WEIGHTS["resource_fit"] * fit
-            + WEIGHTS["cost"] * cost
+            weights["timing"] * timing
+            + weights["peak_utilization"] * peak
+            + weights["risk_level"] * risk
+            + weights["resource_fit"] * fit
+            + weights["cost"] * cost
         )
         rows.append(
             {

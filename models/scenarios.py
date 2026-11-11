@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from math import isfinite
 
 import pandas as pd
 
 from models import capital, risk
+from models.assumptions import DEFAULT_ASSUMPTIONS, Assumptions
 from models.forecast import (
     RESOURCE_META,
     Expansion,
@@ -15,28 +15,24 @@ from models.forecast import (
     portfolio_series,
     resource_analysis,
 )
-from utils.validation import ValidationError, validate_params, validate_sites
+from utils.validation import ValidationError, validate_costs, validate_params, validate_sites
 
 PRESETS = ("Baseline", "High Growth", "Infrastructure Expansion", "Efficiency Optimization", "Budget-Constrained")
-HIGH_GROWTH_PCT = 25.0
-EFFICIENCY_PCT = 10.0
 DEFAULT_BUDGET_USD_M = 100.0
-DEFAULT_EXPANSION = {"site_id": "DC3", "power_mw": 4.0, "cooling_mwe": 4.0, "racks": 100.0, "month": 12}
-WHATIF_EFFICIENCY_PCT = 10.0
-WHATIF_DELAY_MONTHS = 6
 
 
 def preset_params(name: str, horizon: int = 36, warn_pct: float = 85.0, critical_pct: float = 95.0,
-                  budget_usd_m: float = DEFAULT_BUDGET_USD_M) -> ScenarioParams:
+                  budget_usd_m: float = DEFAULT_BUDGET_USD_M, assumptions: Assumptions | None = None) -> ScenarioParams:
+    a = assumptions or DEFAULT_ASSUMPTIONS
     if name not in PRESETS:
         raise ValueError(f"Unknown scenario: {name}")
     p = ScenarioParams(name=name, horizon=horizon, warn_pct=warn_pct, critical_pct=critical_pct, budget_usd_m=budget_usd_m)
     if name == "High Growth":
-        p.growth_mode, p.growth_value_pct = "override", HIGH_GROWTH_PCT
+        p.growth_mode, p.growth_value_pct = "override", a.high_growth_pct
     elif name == "Infrastructure Expansion":
-        p.expansions = (Expansion(**DEFAULT_EXPANSION),)
+        p.expansions = (a.expansion(),)
     elif name == "Efficiency Optimization":
-        p.efficiency_pct = EFFICIENCY_PCT
+        p.efficiency_pct = a.efficiency_pct
     elif name == "Budget-Constrained":
         p.fund_planned_projects = True
     return p
@@ -64,6 +60,7 @@ class ScenarioResult:
     funded_cost_usd_m: float
     recommendations: list
     warnings: list = field(default_factory=list)
+    assumptions: Assumptions = DEFAULT_ASSUMPTIONS
 
     @property
     def total_investment_usd_m(self) -> float:
@@ -113,13 +110,16 @@ def _project_effects(sites, params, manual, ss0, ra0, ranked):
     return out
 
 
-def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.CostAssumptions | None = None) -> ScenarioResult:
+def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.CostAssumptions | None = None,
+                 assumptions: Assumptions | None = None) -> ScenarioResult:
     costs = costs or capital.CostAssumptions()
+    a = assumptions or DEFAULT_ASSUMPTIONS
     site_rep = validate_sites(sites)
     site_rep.raise_if_invalid()
     validate_params(params, sites["site_id"].tolist()).raise_if_invalid()
-    if any(not isfinite(v) or v < 0 for v in (costs.power_per_mw_usd_m, costs.cooling_per_mwe_usd_m, costs.per_rack_usd_m)):
-        raise ValidationError(["Unit costs must be finite and nonnegative"])
+    cost_errors = validate_costs(costs)
+    if cost_errors:
+        raise ValidationError(cost_errors)
     sites = sites.reset_index(drop=True)
     warnings = list(site_rep.warnings)
 
@@ -128,7 +128,7 @@ def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.Cos
     p0, fc0, ra0, ss0 = _evaluate(sites, params, manual)
 
     planned = capital.planned_projects(sites, costs)
-    ranked = capital.prioritize(planned, ss0, params.horizon)
+    ranked = capital.prioritize(planned, ss0, params.horizon, a.weights(), a.risk_scores())
     available = max(params.budget_usd_m - manual_cost, 0.0)
     ranked = capital.select_within_budget(ranked, available)
     ranked = _project_effects(sites, params, manual, ss0, ra0, ranked) if len(ranked) else ranked
@@ -140,8 +140,8 @@ def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.Cos
     ps = portfolio_series(fc)
     pf = risk.portfolio_summary(ps, ss, sites, p)
 
-    whatif = _whatif(sites, params, applied, ss, pf)
-    recs = risk.build_recommendations(sites, p, ss, pf, ranked, whatif, manual_cost, applied)
+    whatif = _whatif(sites, params, applied, ss, pf, a)
+    recs = risk.build_recommendations(sites, p, ss, pf, ranked, whatif, manual_cost, applied, a.lead_time_months, a.immediate_months)
 
     if manual_cost > params.budget_usd_m + 1e-9:
         warnings.append(
@@ -177,24 +177,24 @@ def run_scenario(sites: pd.DataFrame, params: ScenarioParams, costs: capital.Cos
             )
 
     # Keep requested inputs separate from funded expansions so results can be replayed.
-    return ScenarioResult(params, costs, sites, fc, ra, ss, ps, pf, ranked, applied, manual_cost, funded_cost, recs, warnings)
+    return ScenarioResult(params, costs, sites, fc, ra, ss, ps, pf, ranked, applied, manual_cost, funded_cost, recs, warnings, a)
 
 
-def _whatif(sites, params, applied, ss, pf) -> dict:
+def _whatif(sites, params, applied, ss, pf, a) -> dict:
     out: dict = {}
     site = pf["earliest_site"]
     if site is None:
         return out
     res = pf["earliest_resource"]
-    if params.efficiency_pct < WHATIF_EFFICIENCY_PCT:
-        _, _, ra_e, _ = _evaluate(sites, replace(params, efficiency_pct=WHATIF_EFFICIENCY_PCT), applied)
+    if params.efficiency_pct < a.whatif_efficiency_pct:
+        _, _, ra_e, _ = _evaluate(sites, replace(params, efficiency_pct=a.whatif_efficiency_pct), applied)
         after = ra_e[(ra_e.site_id == site) & (ra_e.resource == res)]["first_exhaustion_month"].iloc[0]
-        out["efficiency"] = {"site_id": site, "resource": res, "pct": WHATIF_EFFICIENCY_PCT,
+        out["efficiency"] = {"site_id": site, "resource": res, "pct": a.whatif_efficiency_pct,
                              "before": pf["earliest_month"], "after": None if pd.isna(after) else int(after)}
     mine = [e for e in applied if e.site_id == site]
     if mine:
         base = mine[0]
-        delay = min(WHATIF_DELAY_MONTHS, 36 - base.month)
+        delay = min(a.whatif_delay_months, 36 - base.month)
         if delay == 0:
             return out
         delayed = [replace(e, month=e.month + delay) if e is base else e for e in applied]
@@ -232,58 +232,4 @@ def scenario_insights(base: ScenarioResult, scn: ScenarioResult) -> list[str]:
     out.append(f"Sites at or above the warning threshold: {s['sites_approaching']} (baseline {b['sites_approaching']}); sites exhausted: {s['sites_exhausted']} (baseline {b['sites_exhausted']}).")
     if scn.total_investment_usd_m:
         out.append(f"Capital committed: ${scn.total_investment_usd_m:.1f}M of ${scn.params.budget_usd_m:.1f}M budget; remaining ${scn.params.budget_usd_m - scn.total_investment_usd_m:.1f}M.")
-    return out
-
-
-OUTCOME = {
-    "Critical": ("Portfolio Shortfall", "red"),
-    "High": ("Site Constraint", "red"),
-    "Medium": ("Reduce Risk", "amber"),
-    "Low": ("Maintain Headroom", "green"),
-}
-
-
-def compare_presets(sites: pd.DataFrame, params: ScenarioParams, costs: capital.CostAssumptions) -> pd.DataFrame:
-    """All five presets evaluated at the active horizon, thresholds and budget."""
-    rows = []
-    for name in PRESETS:
-        pp = preset_params(name, params.horizon, params.warn_pct, params.critical_pct, params.budget_usd_m)
-        r = run_scenario(sites, pp, costs)
-        pf = r.portfolio
-        rows.append(
-            {
-                "scenario": name,
-                "capacity_added_mw": pf["power_horizon_capacity"] - pf["power_baseline_capacity"],
-                "demand_mw": pf["power_horizon_demand"],
-                "utilization_pct": pf["power_horizon_util_pct"],
-                "headroom_mw": pf["power_horizon_headroom"],
-                "earliest_month": pf["earliest_month"],
-                "aggregate_month": pf["aggregate_month"],
-                "cost_usd_m": r.total_investment_usd_m,
-                "risk": pf["portfolio_risk"],
-                "outcome": OUTCOME[pf["portfolio_risk"]][0],
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def risk_indicators(r: ScenarioResult) -> list[tuple[str, str, str]]:
-    """(indicator, level, evidence) from modeled results."""
-    p = r.params
-    out = []
-    for res, meta in RESOURCE_META.items():
-        a = r.analysis[r.analysis["resource"] == res]
-        ex = a["first_exhaustion_month"].dropna()
-        peak = a.sort_values("peak_util_pct", ascending=False).iloc[0]
-        level = risk.classify_risk(float(peak["peak_util_pct"]), int(ex.min()) if len(ex) else None, p.warn_pct, p.critical_pct)
-        ev = f"{peak['site_id']} peak {peak['peak_util_pct']:.0f}%" + (f", first limit month {int(ex.min())}" if len(ex) else "")
-        out.append((f"{meta['label']} capacity", level, ev))
-    late = [e for e in r.applied_expansions if not r.site_summary[r.site_summary["site_id"] == e.site_id].empty
-            and not pd.isna(_site_row(r.site_summary, e.site_id)["earliest_exhaustion_month"])
-            and e.month > int(_site_row(r.site_summary, e.site_id)["earliest_exhaustion_month"])]
-    out.append(("Expansion schedule", "High" if late else "Low" if r.applied_expansions else "Medium",
-                f"{len(late)} expansion(s) activate after exhaustion" if late else (f"{len(r.applied_expansions)} expansion(s) on time" if r.applied_expansions else "No expansion applied")))
-    used = r.total_investment_usd_m
-    ratio = used / p.budget_usd_m if p.budget_usd_m else (1.0 if used else 0.0)
-    out.append(("Capital budget", "High" if ratio > 1 else "Medium" if ratio > 0.8 else "Low", f"${used:.1f}M of ${p.budget_usd_m:.1f}M committed"))
     return out

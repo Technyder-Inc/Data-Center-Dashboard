@@ -1,13 +1,15 @@
-import pandas as pd
 import streamlit as st
 
 from components import charts
-from components.kpi_cards import caption, md, text, warning, chips, html_table, kpi_card, kpi_row, month_text, recommendations_list, risk_pill
-from components.state import get_compare, get_results, mark_custom
+from components.kpi_cards import caption, text, warning, chips, html_table, icon_kpi, month_text, recommendations_list, risk_pill
+from components.state import get_assumptions, get_results, mark_custom
+from utils.validation import LIMITS
 from components.styles import page_header, panel_title
-from models.scenarios import OUTCOME
-from models.capital import LEAD_TIME_MONTHS, WEIGHTS, expansion_cost
+from models.capital import expansion_cost
 from utils import exports
+
+
+REC_PAGE_SIZE = 5
 
 
 def render():
@@ -20,21 +22,27 @@ def render():
     with st.container(border=True):
         panel_title("Capital Cost Assumptions (illustrative, USD millions)")
         a, b, c, d = st.columns(4)
-        a.number_input("Cost per additional MW (power)", 0.0, 100.0, step=0.5, key="cost_power", help="USD millions per MW")
-        b.number_input("Cost per MWe of cooling", 0.0, 100.0, step=0.25, key="cost_cooling", help="USD millions per MW-equivalent")
-        c.number_input("Cost per additional rack", 0.0, 5.0, step=0.005, format="%.3f", key="cost_rack", help="USD millions per rack")
-        d.number_input("Investment budget", 0.0, 1000.0, step=5.0, key="budget", on_change=mark_custom, help="USD millions")
+        a.number_input("Cost per additional MW (power)", *LIMITS["cost_per_mw"], step=0.5, key="cost_power", help="USD millions per MW")
+        b.number_input("Cost per MWe of cooling", *LIMITS["cost_per_mwe"], step=0.25, key="cost_cooling", help="USD millions per MW-equivalent")
+        c.number_input("Cost per additional rack", *LIMITS["cost_per_rack"], step=0.005, format="%.3f", key="cost_rack", help="USD millions per rack")
+        d.number_input("Investment budget", *LIMITS["budget_usd_m"], step=5.0, key="budget", on_change=mark_custom, help="USD millions")
 
     used = r.total_investment_usd_m
     remaining = p.budget_usd_m - used
     proposed_all = r.manual_cost_usd_m + r.projects["cost_usd_m"].sum() if len(r.projects) else r.manual_cost_usd_m
-    kpi_row([
-        kpi_card("Investment Budget", f"${p.budget_usd_m:,.1f}M", f"Scenario: {p.name}"),
-        kpi_card("Committed in Scenario", f"${used:,.1f}M", f"Manual ${r.manual_cost_usd_m:.1f}M + funded projects ${r.funded_cost_usd_m:.1f}M", "red" if remaining < -1e-9 else "blue"),
-        kpi_card("Remaining Budget", f"${remaining:,.1f}M", "Shortfall: budget exceeded" if remaining < -1e-9 else "Available after commitments", "red" if remaining < -1e-9 else "green"),
-        kpi_card("All Planned Projects", f"${r.projects['cost_usd_m'].sum() if len(r.projects) else 0:,.1f}M", f"{len(r.projects)} projects; proposed total incl. manual ${proposed_all:,.1f}M", "amber"),
-        kpi_card(f"Electrical Headroom M{H}", f"{pf['power_horizon_headroom']:.1f} MW", f"Capacity {pf['power_horizon_capacity']:.1f} MW; demand {pf['power_horizon_demand']:.1f} MW", "red" if pf["power_horizon_headroom"] < 0 else "green"),
-    ])
+    neg = remaining < -1e-9
+    for col, html in zip(st.columns(5), [
+        icon_kpi("coins", "Investment Budget", f"${p.budget_usd_m:,.1f}M", sub=f"Scenario: {p.name}"),
+        icon_kpi("trend", "Committed in Scenario", f"${used:,.1f}M", tone="red" if neg else "",
+                 sub=f"Manual ${r.manual_cost_usd_m:.1f}M + funded ${r.funded_cost_usd_m:.1f}M"),
+        icon_kpi("layers", "Remaining Budget", f"${remaining:,.1f}M", tone="red" if neg else "green",
+                 sub="Budget exceeded" if neg else "Available after commitments"),
+        icon_kpi("server", "All Planned Projects", f"${r.projects['cost_usd_m'].sum() if len(r.projects) else 0:,.1f}M",
+                 sub=f"{len(r.projects)} projects; incl. manual ${proposed_all:,.1f}M"),
+        icon_kpi("bolt", f"Electrical Headroom M{H}", f"{pf['power_horizon_headroom']:.1f} MW", tone="red" if pf["power_horizon_headroom"] < 0 else "green",
+                 sub=f"Capacity {pf['power_horizon_capacity']:.1f} MW; demand {pf['power_horizon_demand']:.1f} MW"),
+    ]):
+        col.markdown(html, unsafe_allow_html=True)
     for w in r.warnings:
         if "budget" in w.lower() or "exceeds" in w.lower():
             warning(w)
@@ -71,81 +79,26 @@ def render():
         with st.expander("Scoring methodology"):
             text(
                 "Each project scores 0 to 100 using fixed weights, evaluated on the active scenario without the funded planned projects:\n\n"
-                + "\n".join(f"- **{k.replace('_', ' ').title()}** weight {int(v * 100)}%" for k, v in WEIGHTS.items())
+                + "\n".join(f"- **{k.replace('_', ' ').title()}** weight {int(v * 100)}%" for k, v in get_assumptions().weights().items())
                 + "\n\nTiming = 100 x (1 - exhaustion month / horizon), 0 if no exhaustion. Peak utilization = (peak% - 50) / 50 capped to 0 to 100. "
                 "Risk level: Low 0, Medium 40, High 70, Critical 100. Resource fit = 100 if the project adds capacity to the site's first limiting resource. "
                 "Cost = 100 x (1 - cost / highest project cost). Ties break by site ID. Selection walks the ranking and funds each project that fits the remaining budget."
             )
 
-    with st.container(border=True):
-        panel_title(f"What-If Analysis (M{H} Outcomes)")
-        rows = []
-        for c in get_compare().itertuples():
-            tone = OUTCOME[c.risk][1]
-            rows.append([c.scenario, f"+{c.capacity_added_mw:.1f} MW", f"<span class='t-{'red' if c.utilization_pct > 100 else 'green'}'>{c.utilization_pct:.1f}%</span>",
-                         f"${c.cost_usd_m:.1f}M", f"<span class='pill pill-{tone}'>{c.outcome}</span>"])
-        html_table([("Scenario", False), ("New capacity", True), (f"Utilization M{H}", True), ("Capital", True), ("Outcome", False)], rows)
-
-    s1, s2 = st.columns([3, 2])
-    with s1, st.container(border=True):
-        panel_title("Site Forecast (Power, MW)")
-        fcp = r.forecast[r.forecast["resource"] == "power"]
-        trend = fcp[fcp["month"] % 6 == 0].sort_values("month").groupby("site_id")["demand"].apply(list)
-        at = fcp.pivot(index="site_id", columns="month", values="demand")
-        tbl = pd.DataFrame({"Site": at.index, "Current": at[0].values, "12M": at[12].values, "24M": at[24].values, "36M": at[36].values,
-                            "Trend": [trend[s] for s in at.index]})
-        tot = pd.DataFrame([{"Site": "Total", "Current": tbl["Current"].sum(), "12M": tbl["12M"].sum(), "24M": tbl["24M"].sum(), "36M": tbl["36M"].sum(),
-                             "Trend": [float(fcp[fcp["month"] == m]["demand"].sum()) for m in range(0, 37, 6)]}])
-        fmt = st.column_config.NumberColumn(format="%.1f")
-        st.dataframe(pd.concat([tbl, tot], ignore_index=True), hide_index=True, width="stretch",
-                     column_config={"Current": fmt, "12M": fmt, "24M": fmt, "36M": fmt, "Trend": st.column_config.LineChartColumn("Trend (0 to 36M)")})
-    with s2, st.container(border=True):
-        panel_title("Operational Risks (Top 3)")
-        risky = [x for x in r.recommendations if x["severity"] in ("critical", "high")][:3] or r.recommendations[:3]
-        lvl = {"critical": "Critical", "high": "High"}
-        html_table([("Risk", False), ("Level", False)],
-                   [[f"<b>{x['title']}</b><br><span class='kpi-sub'>{x['detail']}</span>", risk_pill(lvl.get(x["severity"], "Medium"))] for x in risky])
-
-    funded_now = r.projects[r.projects["funding_status"] == "Funded"] if len(r.projects) else r.projects
-    decision_basis = repr((p, r.costs, funded_now.to_dict("records")))
-    if st.session_state.get("_decision_basis") != decision_basis:
-        for key in list(st.session_state):
-            if key.startswith("ui_req_") or key == "ui_approval":
-                del st.session_state[key]
-        st.session_state["_decision_basis"] = decision_basis
-    d1, d2 = st.columns([3, 2])
-    with d1, st.container(border=True):
-        panel_title("Decision Requests")
-        if len(funded_now):
-            for x in funded_now.itertuples():
-                st.checkbox(md(f"Approve {x.site_id} expansion: +{x.power_mw:g} MW, +{x.cooling_mwe:g} MWe, +{x.racks:g} racks, ${x.cost_usd_m:.1f}M, activation month {x.activation_month}"), key=f"ui_req_{x.site_id}")
-        else:
-            st.caption("No projects fit the budget.")
-        choice = st.radio("Executive approval", ["Approve", "Approve with Conditions", "Defer", "Reject"], key="ui_approval", horizontal=True)
-        picked = [x.site_id for x in funded_now.itertuples() if st.session_state.get(f"ui_req_{x.site_id}")]
-        caption(f"Decision (this session only, not persisted): {choice}. Requests ticked: {', '.join(picked) or 'none'}.")
-    with d2, st.container(border=True):
-        panel_title("Recommendation")
-        if len(funded_now):
-            unf = r.projects[(r.projects["funding_status"] == "Unfunded") & r.projects["exhaustion_month_before"].notna()]
-            msg = (f"Fund {', '.join(funded_now['site_id'])} (${funded_now['cost_usd_m'].sum():.1f}M of ${p.budget_usd_m:.1f}M budget). "
-                   + (f"Earliest constraint: {pf['earliest_site']} {pf['earliest_resource']} in month {pf['earliest_month']}. " if pf["earliest_month"] is not None else "")
-                   + (f"Unfunded sites with modeled exhaustion: {', '.join(unf['site_id'])}." if len(unf) else "No unfunded site exhausts within the horizon."))
-            residual = funded_now[funded_now["exhaustion_month_after"].notna()]
-            if len(residual):
-                msg += " Funding does not eliminate all modeled exhaustion at " + ", ".join(residual.site_id) + "; review timing and residual resource constraints before approval."
-            no_fit = funded_now[funded_now["resource_fit_score"] == 0]
-            if len(no_fit):
-                msg += " Projects at " + ", ".join(no_fit.site_id) + " do not add the limiting resource; revise their scope."
-        else:
-            msg = "No planned project fits the budget; increase the budget or reduce project scope."
-        text(msg)
-
     c1, c2 = st.columns([3, 2])
     with c1, st.container(border=True):
-        panel_title("Executive Recommendations")
-        recommendations_list(r.recommendations)
-        caption(f"Rules are deterministic Python over modeled results. Schedule assumes a {LEAD_TIME_MONTHS}-month commissioning lead time.")
+        panel_title("Executive Recommendations", "target")
+        recs = r.recommendations
+        pages = max(1, -(-len(recs) // REC_PAGE_SIZE))
+        page = min(max(int(st.session_state.get("ui_rec_page") or st.session_state.get("ui_rec_last", 1)), 1), pages)
+        st.session_state["ui_rec_page"] = str(page)
+        st.session_state["ui_rec_last"] = page
+        recommendations_list(recs[(page - 1) * REC_PAGE_SIZE:page * REC_PAGE_SIZE])
+        if pages > 1:
+            info_col, pager_col = st.columns([3, 2], vertical_alignment="center")
+            info_col.markdown(f"<span style='color:#9fb0d6;font-size:.85rem'>Showing {(page - 1) * REC_PAGE_SIZE + 1} to {min(page * REC_PAGE_SIZE, len(recs))} of {len(recs)}</span>", unsafe_allow_html=True)
+            pager_col.segmented_control("Page", [str(n) for n in range(1, pages + 1)], key="ui_rec_page", label_visibility="collapsed")
+        caption(f"Rules are deterministic Python over modeled results. Schedule assumes a {get_assumptions().lead_time_months}-month commissioning lead time.")
     with c2, st.container(border=True):
         panel_title("Manual Expansion Costing")
         if r.applied_expansions and any(e.source == "manual" for e in r.applied_expansions):

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import fields
+from pathlib import Path
 
 import pandas as pd
 
@@ -75,6 +77,18 @@ def forecast_frame(result) -> pd.DataFrame:
     ]
 
 
+DATASET = Path(__file__).resolve().parents[1] / "data" / "synthetic_sites.csv"
+
+
+def _data_source(sites: pd.DataFrame) -> str:
+    try:
+        cols = [c for c in sites.columns if c not in ("risk_status", "estimated_project_cost_usd_m")]
+        pd.testing.assert_frame_equal(pd.read_csv(DATASET)[cols], sites[cols].reset_index(drop=True), check_dtype=False)
+        return "data/synthetic_sites.csv"
+    except AssertionError:
+        return "edited in app"
+
+
 def scenario_frame(result) -> pd.DataFrame:
     p, pf = result.params, result.portfolio
     rows: list[tuple] = []
@@ -82,6 +96,9 @@ def scenario_frame(result) -> pd.DataFrame:
     def add(section, name, value, unit=""):
         rows.append((result.params.name, section, name, "" if value is None else value, unit))
 
+    add("assumption", "facility_data_source", _data_source(result.sites))
+    for f in fields(result.assumptions):
+        add("model_assumption", f.name, getattr(result.assumptions, f.name))
     add("assumption", "forecast_horizon", p.horizon, "months")
     add("assumption", "growth_mode", p.growth_mode)
     add("assumption", "portfolio_growth_value", p.growth_value_pct, "percent")

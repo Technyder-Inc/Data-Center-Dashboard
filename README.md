@@ -8,6 +8,8 @@ Synthetic, public-safe Streamlit demonstration of regional data center capacity 
 - Capacity Forecasting: per-site and multi-site power, cooling and rack forecasts with threshold, exhaustion and expansion markers; first limiting resource per site; monthly table.
 - Scenario Planning: horizon, growth (site rates, portfolio adjustment or override, per-site overrides), expansion, efficiency, budget, thresholds; before/after comparison; Reset to Baseline.
 - Executive Decisions: cost assumptions, budget use, transparent project ranking, funded vs unfunded projects, recommendations, four CSV downloads.
+- Modal editors for the facility data and for the model assumptions, with validation and reset.
+- One table of numeric limits drives every input and the server-side checks.
 - Site-level and portfolio-level exhaustion are reported separately everywhere.
 
 ## Structure
@@ -21,7 +23,7 @@ utils/                 validation.py, exports.py
 data/synthetic_sites.csv
 scripts/generate_data.py
 tests/                 pytest suite
-docs/                  DATA_DICTIONARY.md, METHODOLOGY.md, HANDOVER.md
+docs/                  DATA_DICTIONARY.md, METHODOLOGY.md, HANDOVER.md, SOW_RECONCILIATION.md
 ```
 
 ## Run locally

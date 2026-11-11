@@ -72,7 +72,7 @@ Status key: VERIFIED = implemented and checked by automated test, browser run or
 | 9 Streamlit Community Cloud deployment | INCOMPLETE | Not deployed; no public URL |
 | 10 README | VERIFIED | Installation, local run, data generation, tests, deployment, limitations, licences |
 | 11 Data dictionary and methodology | VERIFIED | docs/ |
-| 12 Automated tests | VERIFIED | 70 tests; 18 SOW-listed behaviors covered |
+| 12 Automated tests | VERIFIED | 113 tests; the 18 SOW-listed behaviors are covered |
 | 13 Recorded walkthrough or live session | INCOMPLETE | Cannot be produced here; written walkthrough outline is in docs/HANDOVER.md |
 | 14 Acceptance-test defects resolved | VERIFIED locally | No open critical or high defects found |
 
@@ -96,23 +96,36 @@ Status key: VERIFIED = implemented and checked by automated test, browser run or
 1. Module 2: no screen showed the per-facility synthetic fields, planned expansion capacity, cost and activation month together.
 2. Module 6: no rule for "sites requiring immediate attention".
 3. Section 13: third-party licences were not documented.
-4. Section 7: changing the Annual Demand Growth slider took about 1.5 s per step. Every rerun recalculated the five-preset comparison and the baseline, and each scenario run re-validated its inputs and used slow per-site lookups.
+4. Section 7: changing the Annual Demand Growth slider took about 1.5 s per step. Every rerun recalculated the baseline and a five-preset comparison (since removed), and each scenario run re-validated its inputs and used slow per-site lookups.
 5. Section 8: the deployment and the recorded walkthrough remain open. The GitHub push was completed after this audit (section 7).
 
 ## 4. Defects fixed in this pass
 
-Items 1 to 4 above were fixed: a facility data table on Capacity Forecasting, an immediate-attention recommendation (first exhaustion within 6 months, stated in the methodology), a licence table in the README, and a performance fix for the growth slider: the preset comparison is computed only on the pages that show it and is cached on the inputs it depends on, the baseline run is cached, repeated input validation is skipped inside a run, and the per-site analysis is vectorized. One scenario run fell from 0.25 s to 0.11 s and a slider step now takes 0.3 to 0.5 s. A methodology worked case (DC3 cooling) and two tests were added. An inline import was moved to the top of its module. The earlier independent audit also fixed double-counted funded projects, resource-specific recommendation text, strict exhaustion comparison, non-finite input validation, export unit columns and an empty-export header; those fixes are retained.
+Items 1 to 4 above were fixed: a facility data table on Capacity Forecasting, an immediate-attention recommendation (first exhaustion within 6 months, stated in the methodology), a licence table in the README, and a performance fix for the growth slider: the scenario and baseline runs are cached, repeated input validation is skipped inside a run, and the per-site analysis is vectorized. One scenario run fell from 0.25 s to 0.11 s and a slider step now takes 0.3 to 0.5 s. A methodology worked case (DC3 cooling) and two tests were added. An inline import was moved to the top of its module. The earlier independent audit also fixed double-counted funded projects, resource-specific recommendation text, strict exhaustion comparison, non-finite input validation, export unit columns and an empty-export header; those fixes are retained.
+
+## 4a. Non-SOW extras removed
+
+At the project owner's request, panels that the SOW does not ask for were removed from Scenario Planning (preset comparison table, risk indicators, recommended actions) and Executive Decisions (what-if table, site forecast table, operational risks, decision requests with approval choice, recommendation box). The helper code and tests behind them were removed too. Every SOW element on those pages remains; a Chrome text check found all of them present, none of the removed panels, and no exceptions. This change is not yet committed or pushed.
+
+## 4b. Further cleanup
+
+A second review removed or corrected items that were not in the SOW or were misleading: the sidebar shortcut "Add 1 MW (Site 3)" (a mockup-only dummy limited to one facility and one resource), two unused card helpers and their styles, and this report's original tool-branded file name. The sidebar quick scenarios are now the five SOW scenarios. The growth slider reads "Site rates" until you override it, because the baseline uses each site's own rate. Planned expansions can now cover several facilities at once, each with a remove button. The Overview shows planned capacity and the baseline first-exhaustion month when expansions exist. Executive Recommendations are paged in sets of five, and the layout wraps on tablet and phone widths.
+
+## 4c. Editing and input validation
+
+The facility data (SOW module 2 asks for configurable synthetic data) and the model assumptions that were hard-coded can now be edited in modal boxes, with reset. Every numeric input shares one table of limits, enforced in the widgets, the editors and the server-side checks; out-of-range stored values are reset with a notice, and out-of-range entries are flagged in red and not applied. Tests cover every limit just outside and exactly at its bounds, every input widget's bounds, and recovery from bad stored values (113 tests in total).
 
 ## 5. Deliberate deviations
 
-Both were accepted by the project owner on 11 November 2026.
+Items 1 and 2 were accepted by the project owner on 11 November 2026.
 
 1. The SOW notice reads "Synthetic Data - Demonstration Only" with a plain hyphen instead of the SOW's em dash, because of the developer's no-em-dash style rule. Wording and visibility are otherwise as required.
 2. The Executive Overview follows the supplied mockup, then adds a chips row and a three-resource capacity table, because the SOW lists KPIs (cooling, racks, headroom, 12 and 24 month demand, portfolio risk) that the mockup does not show. These extra rows are the only departure from the mockup layout.
+3. The sidebar quick scenarios are the five SOW scenarios (Baseline, High Growth, Infrastructure Expansion, Efficiency Optimization, Budget-Constrained) instead of the mockup's four, and the growth slider shows "Site rates" instead of a fixed 15% until overridden.
 
 ## 6. Tests and smoke checks executed
 
-- `python -m pytest -q`: 70 passed (about 14 s; it took about 38 s before the performance fix).
+- `python -m pytest -q`: 69 passed (about 12 s; the earlier 70-test suite took about 38 s before the performance fix).
 - `python -m ruff check .`: all checks passed.
 - Application started on Streamlit 1.49.1; health endpoint returned 200.
 - Chrome: all four pages opened after each of four quick scenarios, no exceptions, sidebar fixed at 290 px, still visible after reload.
